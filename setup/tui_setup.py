@@ -13,6 +13,9 @@ import os
 import sys
 import json
 import shutil
+import time
+import subprocess
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
@@ -427,17 +430,34 @@ def phase3_model() -> Dict:
 
 
 def _setup_ollama(ram_gb: int) -> Dict:
-    """Configure Ollama local provider."""
+    """Configure Ollama local provider — auto-installs if missing."""
     config = {"provider": "ollama", "auto_download": True, "ollama_host": "http://127.0.0.1:11434"}
+    import subprocess
 
     # Check if Ollama is installed
+    ollama_installed = False
     try:
-        import subprocess
-        subprocess.run(["ollama", "--version"], capture_output=True, timeout=3)
-        _step("Ollama CLI found", "ok")
+        r = subprocess.run(["ollama", "--version"], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            ollama_installed = True
+            _step(f"Ollama CLI found: {r.stdout.strip()}", "ok")
     except FileNotFoundError:
-        _step("Ollama not installed — download from https://ollama.ai", "skip")
-        console.print("  You can install Ollama later and Custo will auto-detect it.", style=STYLES["info"])
+        pass
+
+    if not ollama_installed:
+        _step("Ollama not installed", "skip")
+        if Confirm.ask("  Auto-install Ollama now?", default=True, console=console):
+            _install_ollama()
+            # Re-check after install
+            try:
+                r = subprocess.run(["ollama", "--version"], capture_output=True, text=True, timeout=5)
+                if r.returncode == 0:
+                    ollama_installed = True
+                    _step(f"Ollama installed: {r.stdout.strip()}", "ok")
+            except FileNotFoundError:
+                _step("Installation may need a restart — install manually from https://ollama.ai", "skip")
+        else:
+            console.print("  Install later from https://ollama.ai", style=STYLES["info"])
 
     # Model recommendations based on RAM
     try:
@@ -813,66 +833,178 @@ def _save_config(gateway_cfg: Dict, llm_cfg: Dict, channels_cfg: Dict, workspace
 # Post-setup: Provider actions
 # ═══════════════════════════════════════════════════════════════
 
-def _post_setup_ollama(model: str, auto_download: bool):
-    """Post-setup actions for Ollama: detect, install, download model."""
+# ── Ollama auto-install ─────────────────────────────────────
+
+def _install_ollama():
+    """Download and install Ollama silently."""
+    import subprocess
+    import urllib.request
+    import sys
+    import os
+
+    _step("Downloading Ollama installer...", "...")
+    is_windows = os.name == "nt"
+
+    try:
+        if is_windows:
+            installer = os.path.join(os.environ.get("TEMP", "/tmp"), "OllamaSetup.exe")
+            url = "https://ollama.ai/download/OllamaSetup.exe"
+            urllib.request.urlretrieve(url, installer)
+            _step("Running installer (this may take a minute)...", "...")
+            # Install silently (NSIS silent mode)
+            subprocess.run([installer, "/S"], timeout=120, check=True)
+            _step("Ollama installed!", "ok")
+            # Clean up
+            try:
+                os.remove(installer)
+            except Exception:
+                pass
+        else:
+            # Linux / macOS — use official install script
+            url = "https://ollama.ai/install.sh"
+            script = urllib.request.urlopen(url, timeout=30).read()
+            proc = subprocess.run(
+                ["sh"], input=script, capture_output=True, timeout=120
+            )
+            if proc.returncode == 0:
+                _step("Ollama installed!", "ok")
+            else:
+                _step("Installation may have issues: " + proc.stderr.decode()[:80], "fail")
+    except Exception as e:
+        _step(f"Auto-install failed: {e}", "fail")
+        console.print(f"  [{TEXT_DIM}]Install manually from https://ollama.ai and re-run setup[/]")
+
+    # Add to PATH for Windows if needed
+    if is_windows:
+        ollama_paths = [
+            os.path.expandvars(r"%PROGRAMFILES%\Ollama"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama"),
+            os.path.expandvars(r"%USERPROFILE%\AppData\Local\Programs\Ollama"),
+        ]
+        for p in ollama_paths:
+            if os.path.isdir(p) and p not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = p + os.pathsep + os.environ.get("PATH", "")
+
+
+def _ollama_start_daemon() -> bool:
+    """Ensure Ollama daemon is running. Returns True if running."""
     import subprocess
     import urllib.request
 
-    # Check if Ollama CLI exists
-    ollama_found = False
-    try:
-        r = subprocess.run(["ollama", "--version"], capture_output=True, text=True, timeout=5)
-        if r.returncode == 0:
-            ollama_found = True
-            _step(f"Ollama CLI found: {r.stdout.strip()}", "ok")
-    except FileNotFoundError:
-        pass
-
-    # Check if Ollama daemon is running
-    daemon_running = False
+    # Check if already running
     try:
         urllib.request.urlopen("http://127.0.0.1:11434", timeout=2)
-        daemon_running = True
         _step("Ollama daemon running at http://127.0.0.1:11434", "ok")
+        return True
     except Exception:
         pass
 
+    # Start it
+    _step("Starting Ollama daemon...", "...")
+    try:
+        if os.name == "nt":
+            # On Windows, find the Ollama binary and start
+            for p in os.environ.get("PATH", "").split(os.pathsep):
+                candidate = os.path.join(p, "ollama.exe")
+                if os.path.isfile(candidate):
+                    subprocess.Popen([candidate, "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    break
+            else:
+                # Fallback: just try running ollama serve
+                subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        import time
+        # Wait for daemon to start (up to 15 seconds)
+        for _ in range(15):
+            time.sleep(1)
+            try:
+                urllib.request.urlopen("http://127.0.0.1:11434", timeout=1)
+                _step("Ollama daemon started", "ok")
+                return True
+            except Exception:
+                continue
+        _step("Ollama daemon didn't start — run 'ollama serve' manually", "skip")
+        return False
+    except Exception as e:
+        _step(f"Could not start daemon: {e}", "fail")
+        return False
+
+
+def _ollama_pull_model(model: str) -> bool:
+    """Download an Ollama model. Returns True if successful."""
+    import subprocess
+
+    # Check if already installed
+    try:
+        r = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=15)
+        if model in r.stdout:
+            _step(f"Model '{model}' already installed", "ok")
+            return True
+    except Exception:
+        pass
+
+    _step(f"Downloading model '{model}'...", "...")
+    console.print(f"  [{TEXT_DIM}]Running: ollama pull {model}[/]")
+    console.print(f"  [{TEXT_DIM}]This may take a few minutes depending on model size.[/]")
+
+    try:
+        r = subprocess.run(
+            ["ollama", "pull", model],
+            capture_output=True, text=True, timeout=600  # 10 min max
+        )
+        if r.returncode == 0:
+            _step(f"Model '{model}' downloaded", "ok")
+            return True
+        else:
+            _step(f"Download failed: {r.stderr.strip()[:100]}", "fail")
+            console.print(f"  [{TEXT_DIM}]Try: ollama pull {model}[/]")
+            return False
+    except subprocess.TimeoutExpired:
+        _step("Download timed out. Run: ollama pull " + model, "skip")
+        return False
+
+
+def _post_setup_ollama(model: str, auto_download: bool):
+    """Post-setup: ensure Ollama installed, running, model downloaded."""
+    import subprocess
+    import urllib.request
+
+    ollama_found = False
+    try:
+        r = subprocess.run(["ollama", "--version"], capture_output=True, text=True, timeout=5)
+        ollama_found = r.returncode == 0
+    except FileNotFoundError:
+        pass
+
+    # Install if missing
     if not ollama_found:
-        _step("Ollama not installed — download from https://ollama.ai", "skip")
-        console.print(f"    [{TEXT_DIM}]Install, then run: ollama serve[/]")
+        _step("Ollama not installed", "skip")
+        if Confirm.ask("  Install Ollama now?", default=True, console=console):
+            _install_ollama()
+            # Re-check after install
+            try:
+                r = subprocess.run(["ollama", "--version"], capture_output=True, text=True, timeout=5)
+                ollama_found = r.returncode == 0
+            except FileNotFoundError:
+                pass
+
+    if not ollama_found:
+        _step("Install Ollama manually from https://ollama.ai", "skip")
         return
 
+    # Ensure daemon is running
+    daemon_running = _ollama_start_daemon()
+
     if not daemon_running:
-        _step("Ollama daemon not running — starting...", "...")
-        try:
-            subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            _step("Ollama daemon started", "ok")
-        except Exception:
-            _step("Start manually: ollama serve in another terminal", "skip")
+        _step("Start daemon manually: ollama serve", "skip")
+        return
 
-    # Check if model is already installed
+    # Download model
     if model:
-        model_installed = False
-        try:
-            r = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=10)
-            model_installed = model in r.stdout
-        except Exception:
-            pass
-
-        if model_installed:
-            _step(f"Model '{model}' already installed", "ok")
-        elif auto_download:
-            _step(f"Downloading model '{model}' (this may take a while)...", "...")
-            console.print(f"    [{TEXT_DIM}]Running: ollama pull {model}[/]")
-            try:
-                r = subprocess.run(["ollama", "pull", model], capture_output=True, text=True, timeout=300)
-                if r.returncode == 0:
-                    _step(f"Model '{model}' downloaded", "ok")
-                else:
-                    _step(f"Download failed: {r.stderr.strip()[:80]}", "fail")
-                    console.print(f"    [{TEXT_DIM}]Try: ollama pull {model}[/]")
-            except subprocess.TimeoutExpired:
-                _step("Download timed out — try: ollama pull " + model, "skip")
+        if auto_download:
+            _ollama_pull_model(model)
         else:
             _step(f"Run 'ollama pull {model}' to download the model", "skip")
 
