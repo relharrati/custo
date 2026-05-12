@@ -810,6 +810,122 @@ def _save_config(gateway_cfg: Dict, llm_cfg: Dict, channels_cfg: Dict, workspace
 
 
 # ═══════════════════════════════════════════════════════════════
+# Post-setup: Provider actions
+# ═══════════════════════════════════════════════════════════════
+
+def _post_setup_ollama(model: str, auto_download: bool):
+    """Post-setup actions for Ollama: detect, install, download model."""
+    import subprocess
+    import urllib.request
+
+    # Check if Ollama CLI exists
+    ollama_found = False
+    try:
+        r = subprocess.run(["ollama", "--version"], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            ollama_found = True
+            _step(f"Ollama CLI found: {r.stdout.strip()}", "ok")
+    except FileNotFoundError:
+        pass
+
+    # Check if Ollama daemon is running
+    daemon_running = False
+    try:
+        urllib.request.urlopen("http://127.0.0.1:11434", timeout=2)
+        daemon_running = True
+        _step("Ollama daemon running at http://127.0.0.1:11434", "ok")
+    except Exception:
+        pass
+
+    if not ollama_found:
+        _step("Ollama not installed — download from https://ollama.ai", "skip")
+        console.print(f"    [{TEXT_DIM}]Install, then run: ollama serve[/]")
+        return
+
+    if not daemon_running:
+        _step("Ollama daemon not running — starting...", "...")
+        try:
+            subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            _step("Ollama daemon started", "ok")
+        except Exception:
+            _step("Start manually: ollama serve in another terminal", "skip")
+
+    # Check if model is already installed
+    if model:
+        model_installed = False
+        try:
+            r = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=10)
+            model_installed = model in r.stdout
+        except Exception:
+            pass
+
+        if model_installed:
+            _step(f"Model '{model}' already installed", "ok")
+        elif auto_download:
+            _step(f"Downloading model '{model}' (this may take a while)...", "...")
+            console.print(f"    [{TEXT_DIM}]Running: ollama pull {model}[/]")
+            try:
+                r = subprocess.run(["ollama", "pull", model], capture_output=True, text=True, timeout=300)
+                if r.returncode == 0:
+                    _step(f"Model '{model}' downloaded", "ok")
+                else:
+                    _step(f"Download failed: {r.stderr.strip()[:80]}", "fail")
+                    console.print(f"    [{TEXT_DIM}]Try: ollama pull {model}[/]")
+            except subprocess.TimeoutExpired:
+                _step("Download timed out — try: ollama pull " + model, "skip")
+        else:
+            _step(f"Run 'ollama pull {model}' to download the model", "skip")
+
+
+def _post_setup_lmstudio():
+    """Post-setup instructions for LM Studio."""
+    import urllib.request
+
+    try:
+        urllib.request.urlopen("http://127.0.0.1:1234/v1/models", timeout=2)
+        _step("LM Studio server running at http://127.0.0.1:1234", "ok")
+    except Exception:
+        _step("LM Studio not detected", "skip")
+        instructions = [
+            f"  [{TEXT_DIM}]1. Download LM Studio from https://lmstudio.ai[/]",
+            f"  [{TEXT_DIM}]2. Load a model (e.g., llama3.2-3b)[/]",
+            f"  [{TEXT_DIM}]3. Go to Server tab → Start Server[/]",
+            f"  [{TEXT_DIM}]4. Verify: curl http://127.0.0.1:1234/v1/models[/]",
+        ]
+        for line in instructions:
+            console.print(line)
+        console.print()
+
+
+def _post_setup_vllm(model: str, host: str):
+    """Post-setup instructions for vLLM."""
+    import urllib.request
+
+    try:
+        urllib.request.urlopen(host, timeout=2)
+        _step(f"vLLM server running at {host}", "ok")
+    except Exception:
+        _step("vLLM server not detected", "skip")
+        console.print(f"    [{TEXT_DIM}]Start vLLM:[/]")
+        console.print(f"    [{TEXT_DIM}]  python -m vllm.entrypoints.openai.api_server --model {model}[/]")
+        console.print()
+
+
+def _post_setup_cloud(provider: str, env_var: str):
+    """Verify cloud API key is set."""
+    import os
+    key = os.environ.get(env_var, "")
+    if key:
+        masked = f"{key[:8]}...{key[-4:]}" if len(key) > 12 else "(set)"
+        _step(f"{env_var}: {masked}", "ok")
+    else:
+        _step(f"{env_var} not set", "skip")
+        console.print(f"    [{TEXT_DIM}]Set the {env_var} environment variable or[/]")
+        console.print(f"    [{TEXT_DIM}]add it to your shell profile.[/]")
+        console.print()
+
+
+# ═══════════════════════════════════════════════════════════════
 # Main wizard entry point
 # ═══════════════════════════════════════════════════════════════
 
@@ -893,30 +1009,68 @@ def run_tui_wizard():
     console.print(f"\n  [{BLUE}]▸[/] Saving configuration...\n")
     _save_config(gateway_cfg, llm_cfg, channels_cfg, workspace_cfg)
 
-    # ── Summary ────────────────────────────────────────────
+    # ── Post-setup: Provider actions ───────────────────────
+    console.print(f"\n  [{BLUE}]▸[/] Checking provider setup...\n")
+    provider = llm_cfg.get("provider", "")
+    model = llm_cfg.get("model", "")
+
+    if provider == "ollama":
+        _post_setup_ollama(model, llm_cfg.get("auto_download", False))
+    elif provider == "lmstudio":
+        _post_setup_lmstudio()
+    elif provider == "vllm":
+        _post_setup_vllm(model, llm_cfg.get("vllm_host", "http://127.0.0.1:8000"))
+    elif provider in ("openai", "anthropic", "gemini"):
+        _post_setup_cloud(provider, llm_cfg.get("api_key_env", ""))
+    else:
+        _step("No LLM provider configured — using hardcoded responses", "skip")
+
+    # ── Completion screen ──────────────────────────────────
     console.print("\n")
-    console.print(Panel(
-        f"[{EMERALD}]  ✓[/]  Security confirmed\n"
-        f"[{BLUE}]  ✓[/]  Gateway: {gateway_cfg.get('bind_address', '127.0.0.1')}:{gateway_cfg.get('port', 18789)}\n"
-        f"[{TEAL}]  ✓[/]  Provider: {llm_cfg.get('provider', 'none')} ({llm_cfg.get('model', 'N/A')})\n"
-        f"[{GREEN}]  ✓[/]  Channels: {sum(1 for v in channels_cfg.values() if v)} enabled\n"
-        f"[{PURPLE}]  ✓[/]  Skills: {len(workspace_cfg.get('skills_enabled', []))} enabled\n"
-        f"\n"
-        f"[{EMERALD}]   ____          _        [/{EMERALD}]\n"
-        f"[{BLUE}]  |  _ \\ _   _ ___| |_ ___  [/]\n"
-        f"[{TEAL}]  | |_) | | | / __| __/ _ \\ [/]\n"
-        f"[{GREEN}]  |  _ <| |_| \\__ \\ || (_) |[/]\n"
-        f"[{EMERALD}]  |_| \\_\\\\__,_|___/\\__\\___/ [/]\n"
-        f"\n"
-        f"[{TEXT}]  Ready to go![/]\n"
-        f"\n"
-        f"  [{EMERALD}]custo chat[/]     — Start chatting\n"
-        f"  [{BLUE}]custo setup[/]     — Re-run this wizard\n"
-        f"  [{TEAL}]custo doctor[/]    — Health check\n"
-        f"  [{GREEN}]custo daemon[/]   — Manage background service",
-        border_style=EMERALD, box=box.DOUBLE, padding=(2, 4)
-    ))
+    _divider()
     console.print()
+
+    provider_name = {
+        "ollama": "Ollama", "lmstudio": "LM Studio", "vllm": "vLLM",
+        "openai": "OpenAI", "anthropic": "Anthropic", "gemini": "Gemini",
+        "hardcoded": "Hardcoded (no LLM)"
+    }.get(provider, provider.capitalize())
+
+    gateway_addr = f"{gateway_cfg.get('bind_address', '127.0.0.1')}:{gateway_cfg.get('port', 18789)}"
+
+    completed = Panel(
+        f"[{EMERALD}]  Setup complete![/]\n\n"
+        f"[{TEXT_DIM}]  Summary:[/]\n"
+        f"    [{EMERALD}]✓[/]  Security confirmed\n"
+        f"    [{BLUE}]✓[/]  Gateway: {gateway_addr}\n"
+        f"    [{TEAL}]✓[/]  Provider: {provider_name} ({model or 'N/A'})\n"
+        f"    [{GREEN}]✓[/]  Channels: {sum(1 for v in channels_cfg.values() if v)} enabled\n"
+        f"    [{PURPLE}]✓[/]  Skills: {len(workspace_cfg.get('skills_enabled', []))} enabled\n"
+        f"\n"
+        f"[{EMERALD}]  ─── Commands ───────────────────────[/]\n"
+        f"\n"
+        f"  [{EMERALD}]custo chat[/]     Start a conversation with Custo\n"
+        f"  [{BLUE}]custo doctor[/]    Run a system health check\n"
+        f"  [{TEAL}]custo daemon[/]    Start/stop the background service\n"
+        f"  [{GREEN}]custo help[/]      Show all available commands\n"
+        f"  [{PURPLE}]custo setup[/]    Re-run this setup wizard\n"
+        f"\n"
+        f"[{EMERALD}]  ────────────────────────────────────[/]",
+        border_style=EMERALD, box=box.DOUBLE, padding=(2, 4)
+    )
+    console.print(Align.center(completed))
+
+    # ── Offer to start chatting ────────────────────────────
+    console.print()
+    if Confirm.ask("  Start chatting now?", default=True, console=console):
+        _step("Launching chat...", "ok")
+        from interfaces.terminal.tui import ChatTUI
+        import asyncio
+        tui = ChatTUI()
+        asyncio.run(tui.run())
+    else:
+        console.print(f"\n  [{TEXT_DIM}]Run 'custo chat' whenever you're ready.[/]")
+        console.print()
 
 
 def run_wizard(root_path: str = None):
