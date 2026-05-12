@@ -52,31 +52,37 @@ def cmd_install(args):
 
 
 def cmd_setup(args):
-    """Run interactive setup / LLM wizard."""
-    print_header("Custo Setup")
-    print()
+    """Run interactive 5-phase TUI setup wizard."""
     try:
-        from setup.init_config import run_wizard
-        run_wizard()
-    except ImportError as e:
-        print(f"Setup wizard not available ({e}).")
-        print("Run: python setup/init_config.py --wizard")
+        from setup.tui_setup import run_tui_wizard
+        run_tui_wizard()
+    except ImportError:
+        # Fallback to basic wizard
+        try:
+            from setup.init_config import run_wizard
+            run_wizard()
+        except ImportError as e:
+            print(f"Setup wizard not available ({e}).")
+            print("Run: python setup/init_config.py --wizard")
 
 
 def cmd_onboard(args):
-    """First-time onboarding tour."""
-    print_header("Custo Onboarding")
-    print()
-    print("Welcome to Custo! Let's get you started.\n")
-    print("  Step 1: Setup LLM  →  custo setup")
-    print("  Step 2: Start chat  →  custo chat")
-    print("  Step 3: Check docs  →  cat BOOTSTRAP.md")
-    print()
-    print("Quick tips:")
-    print("  custo doctor         —  System health check")
-    print("  custo sessions today —  View today's conversations")
-    print("  custo memory search  —  Search what Custo remembers")
-    print("  custo help           —  Show all commands")
+    """First-time onboarding — launches the full 5-phase TUI wizard."""
+    try:
+        from setup.tui_setup import run_tui_wizard
+        run_tui_wizard()
+    except ImportError:
+        # Stale install — show update instructions
+        print_header("Custo Onboarding")
+        print()
+        print("Welcome to Custo! Let's get you started.\n")
+        print("  Step 1: Update to latest →  custo upgrade")
+        print("  Step 2: Setup wizard      →  custo setup")
+        print("  Step 3: Start chatting    →  custo chat")
+        print()
+        print("Quick tips:")
+        print("  custo doctor   —  System health check")
+        print("  custo help     —  Show all commands")
 
 
 def cmd_init(args):
@@ -152,7 +158,22 @@ def cmd_doctor(args):
 
 
 def cmd_upgrade(args):
-    """Upgrade Custo to latest version."""
+    """Upgrade Custo to latest version via git pull."""
     print_header("Custo Upgrade")
-    print("  Upgrade mechanism not yet implemented.")
-    print("  For now: pull latest from your repository or re-install.")
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            capture_output=True, text=True, timeout=30,
+            cwd=ROOT
+        )
+        if result.returncode == 0:
+            print(f"  {result.stdout.strip()}")
+            print("  [OK] Custo updated to latest version.")
+        else:
+            print(f"  Failed: {result.stderr.strip()}")
+            print("  Try: git pull manually in your installation directory.")
+    except FileNotFoundError:
+        print("  Git not found. Re-install with the install script to update.")
+    except subprocess.TimeoutExpired:
+        print("  Git pull timed out. Check your connection.")
