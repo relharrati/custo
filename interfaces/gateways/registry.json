@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0.0",
+  "description": "Gateway registry for Custo interface gateways",
+  "gateways": {
+    "discord": {
+      "name": "Discord Gateway",
+      "enabled": false,
+      "module": "interfaces.gateways.discord.gateway",
+      "class": "DiscordGateway",
+      "required_config": ["token", "channel_id"]
+    },
+    "whatsapp": {
+      "name": "WhatsApp Gateway",
+      "enabled": false,
+      "module": "interfaces.gateways.whatsapp.gateway",
+      "class": "WhatsAppGateway",
+      "required_config": ["account_sid", "auth_token", "from_number"]
+    }
+  },
+  "routing": {
+    "default_format": "markdown",
+    "max_message_length": 2000
+  }
+}

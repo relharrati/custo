@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Custo
+logs/*.log
+logs/*.json
+memory/search.db
+sessions/search.db
+sessions/index.json
+tasks/today.md
+system/config.user.yaml
+system/config.yaml
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# Build / packaging
+*.egg
+dist/
+build/

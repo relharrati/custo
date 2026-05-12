@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0.0",
+  "description": "Agent registry for Custo autonomous operator system",
+  "agents": {
+    "main": {
+      "name": "Main Agent",
+      "description": "Primary orchestrator agent that handles user interactions and delegates tasks to specialist agents",
+      "identity": "Sisyphus",
+      "capabilities": ["orchestration", "delegation", "verification", "planning"],
+      "skills": ["gsd:*", "review-work", "oracle"],
+      "shared_directories": ["user", "memory", "projects"],
+      "unique_directories": ["identity", "skills", "selfskills", "logs"],
+      "priority": 1
+    },
+    "researcher": {
+      "name": "Research Agent",
+      "description": "Specialist agent for deep research, context gathering, and knowledge acquisition",
+      "identity": "Prometheus",
+      "capabilities": ["research", "exploration", "documentation", "analysis"],
+      "skills": ["librarian", "explore", "gsd:research-phase"],
+      "shared_directories": ["user", "memory", "projects"],
+      "unique_directories": ["identity", "skills", "selfskills", "logs"],
+      "priority": 2
+    },
+    "coder": {
+      "name": "Coder Agent",
+      "description": "Specialist agent for implementation, coding, and technical execution",
+      "identity": "Daedalus",
+      "capabilities": ["coding", "debugging", "testing", "refactoring"],
+      "skills": ["visual-engineering", "quick", "gsd:execute-phase", "ai-slop-remover"],
+      "shared_directories": ["user", "memory", "projects"],
+      "unique_directories": ["identity", "skills", "selfskills", "logs"],
+      "priority": 3
+    },
+    "strategist": {
+      "name": "Strategist Agent",
+      "description": "Specialist agent for architecture, planning, and high-level decision making",
+      "identity": "Athena",
+      "capabilities": ["architecture", "planning", "strategy", "optimization"],
+      "skills": ["oracle", "ultrabrain", "gsd:plan-phase", "gsd:spec-phase"],
+      "shared_directories": ["user", "memory", "projects"],
+      "unique_directories": ["identity", "skills", "selfskills", "logs"],
+      "priority": 4
+    }
+  },
+  "routing": {
+    "default_agent": "main",
+    "task_type_mapping": {
+      "research": "researcher",
+      "exploration": "researcher",
+      "code_implementation": "coder",
+      "debugging": "coder",
+      "visual_work": "coder",
+      "architecture": "strategist",
+      "planning": "strategist",
+      "decision": "strategist"
+    }
+  }
+}
