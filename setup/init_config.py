@@ -5,6 +5,7 @@ Extended with interactive LLM provider and model selection wizard.
 """
 
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -374,11 +375,14 @@ def init_config(root_path: str = None, wizard: bool = False):
     config_path = base / "system" / "config.yaml"
 
     if config_path.exists():
-        print(f"[CONFIG] Config already exists at {config_path}")
-        response = input("Overwrite? (y/N): ").strip().lower()
-        if response != 'y':
-            print("[CONFIG] Aborted.")
-            return
+        if os.environ.get("CUSTO_NONINTERACTIVE") == "1":
+            print(f"[CONFIG] Config exists at {config_path} (keeping existing)")
+        else:
+            print(f"[CONFIG] Config already exists at {config_path}")
+            response = input("Overwrite? (y/N): ").strip().lower()
+            if response != 'y':
+                print("[CONFIG] Aborted.")
+                return
 
     if wizard:
         from setup.tui_setup import run_tui_wizard
