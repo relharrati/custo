@@ -83,14 +83,43 @@ try { & $Python setup/init_config.py 2>$null } catch {}
 try { & $Python setup/first_run.py 2>$null } catch {}
 Ok "Setup complete"
 
-# ── PATH (user-level) ─────────────────────────────────────────
-$userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-if ($userPath -notlike "*$InstallDir*") {
-    $newPath = "$InstallDir;$userPath"
-    [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
-    $env:PATH = $newPath
-    Write-Host "  Added $InstallDir to user PATH" -ForegroundColor Yellow
+# ── Ensure custo is callable ─────────────────────────────────
+# Add a PowerShell function for the current session (no restart needed)
+$instDir = $InstallDir
+$custoBat = Join-Path $instDir "custo.bat"
+$custoPy = Join-Path $instDir "custo"
+
+if (Test-Path $custoBat) {
+    # Create a persistent PowerShell function
+    $profileScript = @"
+
+# Custo CLI
+function custo { & "$custoBat" @args }
+
+"@
+    # Add to current session
+    Remove-Item Function:custo -ErrorAction SilentlyContinue
+    New-Item -Path Function: -Name "custo" -Value { param([string[]]$a) & "$custoBat" @a } -Force | Out-Null
+    Write-Host "  ✓ 'custo' command ready in this session" -ForegroundColor Green
+
+    # Add to PowerShell profile for future sessions
+    $profileDir = Split-Path $PROFILE -Parent
+    if (-not (Test-Path $profileDir)) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }
+    $existingProfile = if (Test-Path $PROFILE) { Get-Content $PROFILE -Raw } else { "" }
+    if ($existingProfile -notlike "*custo*") {
+        Add-Content -Path $PROFILE -Value $profileScript -Encoding UTF8
+        Write-Host "  ✓ Added to PowerShell profile ($PROFILE)" -ForegroundColor Green
+    }
 }
+
+# ── PATH (user-level, for non-PowerShell tools) ──────────────
+$userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+if ($userPath -notlike "*$instDir*") {
+    $newPath = "$instDir;$userPath"
+    [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
+    Write-Host "  ✓ Added to user PATH (new terminals)" -ForegroundColor Green
+}
+$env:PATH = "$instDir;$env:PATH"
 
 # ── Done ──────────────────────────────────────────────────────
 Write-Host ""

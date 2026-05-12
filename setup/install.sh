@@ -70,18 +70,19 @@ step "Running first-time setup..."
 "$PYTHON" setup/first_run.py 2>/dev/null || true
 ok "Setup complete"
 
-# ── PATH setup ────────────────────────────────────────────────
-INSTALL_SCRIPT="$INSTALL_DIR/custo"
-if [ -f "$INSTALL_SCRIPT" ]; then
-  chmod +x "$INSTALL_SCRIPT"
+# ── Make custo available immediately ────────────────────────
+alias custo="$PYTHON \"$INSTALL_DIR/custo\""
+echo ""
+echo "  ✓ 'custo' command ready in this shell"
+echo ""
+
+if [ -f "$HOME/.bashrc" ] && ! grep -q "custo" "$HOME/.bashrc" 2>/dev/null; then
+  echo "alias custo='$PYTHON \"$INSTALL_DIR/custo\"'" >> "$HOME/.bashrc"
+  echo "  ✓ Added to ~/.bashrc"
 fi
-if [ ! -f "/usr/local/bin/custo" ] && [ ! -f "$HOME/.local/bin/custo" ]; then
-  mkdir -p "$HOME/.local/bin"
-  if [ ! -f "$HOME/.local/bin/custo" ]; then
-    ln -sf "$INSTALL_SCRIPT" "$HOME/.local/bin/custo" 2>/dev/null || true
-    echo ""
-    echo -e "  Add to your shell profile:  ${CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}"
-  fi
+if [ -f "$HOME/.zshrc" ] && ! grep -q "custo" "$HOME/.zshrc" 2>/dev/null; then
+  echo "alias custo='$PYTHON \"$INSTALL_DIR/custo\"'" >> "$HOME/.zshrc"
+  echo "  ✓ Added to ~/.zshrc"
 fi
 
 echo ""
