@@ -17,6 +17,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
+# Force UTF-8 for Windows terminal compatibility
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 # Rich-based TUI (must be installed separately)
 try:
     from rich.console import Console
