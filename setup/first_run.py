@@ -99,10 +99,12 @@ Custo system initialized successfully.
         index = {"sessions": [], "version": "1.0"}
 
     index["sessions"].append({
+        "id": session_file.stem[:8],
         "date": datetime.now().strftime("%Y-%m-%d"),
         "path": str(session_file.relative_to(base)),
         "title": "First Session",
-        "type": "initialization"
+        "type": "initialization",
+        "message_count": 1,
     })
     index_path.write_text(json.dumps(index, indent=2))
     print("  Index updated.")
