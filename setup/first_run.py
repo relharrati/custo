@@ -10,6 +10,7 @@ This script runs on first-time setup to:
 """
 
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -45,14 +46,18 @@ def first_run(root_path: str = None):
     model = llm_cfg.get("model", "").strip()
 
     if provider in ("", "auto", "none") or not model:
-        print()
-        print("  [INFO] No LLM model configured yet.")
-        resp = input("  Run LLM setup wizard now? (recommended) [Y/n]: ").strip().lower()
-        if not resp or resp in ("y", "yes"):
-            from setup.tui_setup import run_tui_wizard
-            run_tui_wizard()
+        if os.environ.get("CUSTO_NONINTERACTIVE") == "1":
+            print("  Skipping LLM wizard (non-interactive mode).")
+            print("  Run 'custo setup' later to configure your LLM.")
         else:
-            print("  Skipping LLM setup. Run `py setup/init_config.py --wizard` later.")
+            print()
+            print("  [INFO] No LLM model configured yet.")
+            resp = input("  Run LLM setup wizard now? (recommended) [Y/n]: ").strip().lower()
+            if not resp or resp in ("y", "yes"):
+                from setup.tui_setup import run_tui_wizard
+                run_tui_wizard()
+            else:
+                print("  Skipping LLM setup. Run `custo setup` later.")
 
     # Create initial session
     print("[2/5] Creating first session record...")

@@ -66,9 +66,10 @@ ok "Dependencies installed"
 
 # ── Setup ─────────────────────────────────────────────────────
 step "Running first-time setup..."
-"$PYTHON" setup/init_config.py 2>/dev/null || true
-"$PYTHON" setup/first_run.py 2>/dev/null || true
+CUSTO_NONINTERACTIVE=1 "$PYTHON" setup/init_config.py 2>/dev/null || true
+CUSTO_NONINTERACTIVE=1 "$PYTHON" setup/first_run.py 2>/dev/null || true
 ok "Setup complete"
+echo "  Run 'custo setup' for the full TUI configuration wizard."
 
 # ── Make custo available immediately ────────────────────────
 alias custo="$PYTHON \"$INSTALL_DIR/custo\""

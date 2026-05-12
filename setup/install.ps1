@@ -83,9 +83,12 @@ try {
 
 # ── Setup ─────────────────────────────────────────────────────
 Step "Running first-time setup..."
+$env:CUSTO_NONINTERACTIVE = "1"
 try { & $Python setup/init_config.py 2>$null } catch {}
 try { & $Python setup/first_run.py 2>$null } catch {}
+Remove-Item Env:\CUSTO_NONINTERACTIVE -ErrorAction SilentlyContinue
 Ok "Setup complete"
+Write-Host "  Run 'custo setup' later for the full TUI configuration wizard." -ForegroundColor Cyan
 
 # ── Ensure custo is callable ─────────────────────────────────
 $instDir = $InstallDir
