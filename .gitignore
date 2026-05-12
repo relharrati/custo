@@ -8,15 +8,23 @@ venv/
 env/
 *.egg-info/
 
-# Custo
+# Custo runtime data (not source)
 logs/*.log
 logs/*.json
+memory/inbox/
+memory/short_term/
+memory/daily_memory/
+memory/reflections/
 memory/search.db
+sessions/daily/
 sessions/search.db
 sessions/index.json
 tasks/today.md
-system/config.user.yaml
+daemon/pid/
 system/config.yaml
+
+# Custo user config
+system/config.user.yaml
 
 # OS
 .DS_Store

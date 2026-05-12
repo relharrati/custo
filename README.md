@@ -2,11 +2,34 @@
 
 Custo is an AI-augmented personal operator system that remembers, plans, acts, reflects, and improves over time. Built as a modular Python application with agent-based architecture.
 
-## Status
+## One-Line Install
 
-**Bootstrap phase complete** — core system operational. See `BOOTSTRAP.md` for setup and verification steps.
+```bash
+# Linux / macOS
+curl -fsSL https://github.com/relharrati/custo/raw/master/setup/install.sh | sh
 
-## What Works (v0.2-llm-ready)
+# Windows PowerShell
+powershell -c "iex (iwr 'https://github.com/relharrati/custo/raw/master/setup/install.ps1')"
+
+# npm (requires Python 3.9+)
+npx custo chat
+# or globally: npm install -g custo && custo chat
+```
+
+## Quick Start
+
+```bash
+# 1. Setup LLM provider
+custo setup
+
+# 2. Start chat
+custo chat
+
+# 3. Health check
+custo doctor
+```
+
+## What Works
 
 | Component | Status | Description |
 |-----------|--------|-------------|
@@ -14,28 +37,15 @@ Custo is an AI-augmented personal operator system that remembers, plans, acts, r
 | Daemon | ✅ | Supervisor, workers, scheduler, heartbeat operational |
 | Sessions | ✅ | Daily markdown + JSON index |
 | Memory | ✅ | inbox, short-term, daily, long-term, reflections |
-| CLI | ✅ | `custo chat`, `task`, `project`, `memory`, `config`, `version` |
+| CLI (50+ commands) | ✅ | Full command tree: sessions, memory, projects, tasks, agents, skills, daemon, config, more |
 | TUI Chat | ✅ | Interactive terminal chat with session tracking |
 | LLM Provider System | ✅ | 5 backends (hardcoded, Ollama, LM Studio, vLLM, auto-detect) |
 | Auto Model Selection | ✅ | RAM detection + models.dev API recommendations |
 | Windows Compatibility | ✅ | Python 3.14+ Proactor fixes |
 
-## Quick Start
+## Release
 
-```bash
-# 1. Install
-py -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install pyyaml
-
-# 2. Run first-time setup wizard (chooses LLM provider automatically)
-py setup/first_run.py
-
-# 3. Start chat
-py custo chat
-```
-
-See [BOOTSTRAP.md](BOOTSTRAP.md) for full instructions, verification tests, and troubleshooting.
+**v1.0.0 Bootstrap** — [View on GitHub](https://github.com/relharrati/custo/releases/tag/v1.0.0)
 
 ## Architecture
 

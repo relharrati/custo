@@ -1,5 +1,18 @@
 # Custo Bootstrap Guide
 
+## One-Line Install
+
+```bash
+# Linux / macOS
+curl -fsSL https://github.com/relharrati/custo/raw/master/setup/install.sh | sh
+
+# Windows PowerShell
+powershell -c "iex (iwr 'https://github.com/relharrati/custo/raw/master/setup/install.ps1')"
+
+# npm (requires Python 3.9+)
+npx custo chat
+```
+
 ## Quick Start (3 steps)
 
 ### Step 1: Install Dependencies

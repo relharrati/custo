@@ -1,0 +1,31 @@
+{
+  "name": "custo",
+  "version": "1.0.0",
+  "description": "Custo - Autonomous Digital Operator. AI-augmented personal operator that remembers, plans, acts, reflects, and improves.",
+  "homepage": "https://github.com/relharrati/custo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/relharrati/custo.git"
+  },
+  "keywords": [
+    "ai",
+    "assistant",
+    "agent",
+    "automation",
+    "cli",
+    "llm",
+    "ollama",
+    "productivity"
+  ],
+  "license": "MIT",
+  "bin": {
+    "custo": "bin/custo.js"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "preferGlobal": true,
+  "files": [
+    "bin/custo.js"
+  ]
+}

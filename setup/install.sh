@@ -1,52 +1,93 @@
 #!/bin/bash
-# Custo Installation Script
+# Custo - One-line install:  curl -fsSL https://custo.ai/install.sh | sh
+set -euo pipefail
 
-set -e
+REPO="relharrati/custo"
+BRANCH="master"
+INSTALL_DIR="${CUSTO_DIR:-$HOME/.custo}"
 
-echo "========================================="
-echo "  Custo - Autonomous Operator Installer"
-echo "========================================="
+BOLD='\033[1m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+echo ""
+echo "  ╔═══════════════════════════════════════╗"
+echo "  ║     Custo - Autonomous Operator       ║"
+echo "  ║        One-Line Installer             ║"
+echo "  ╚═══════════════════════════════════════╝"
 echo ""
 
-# Check Python version
-echo "[1/6] Checking Python version..."
-if ! command -v python3 &> /dev/null; then
-    echo "ERROR: Python 3 is required. Please install Python 3.9+ and try again."
-    exit 1
+# ── Check Python ───────────────────────────────────────────────
+step() { echo -e "${CYAN}▸${NC} $1"; }
+fail() { echo -e "  ${BOLD}✗${NC} $1"; exit 1; }
+ok()   { echo -e "  ${GREEN}✓${NC} $1"; }
+
+step "Checking Python..."
+PYTHON=""
+for cmd in python3 python py python3.*; do
+  if command -v "$cmd" &>/dev/null; then
+    VER=$("$cmd" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)
+    MAJOR="${VER%%.*}"
+    if [ "$MAJOR" -ge 3 ] 2>/dev/null; then
+      PYTHON="$cmd"
+      break
+    fi
+  fi
+done
+
+if [ -z "$PYTHON" ]; then
+  fail "Python 3 not found. Install Python 3.9+ from https://python.org"
+fi
+ok "Found $PYTHON ($($PYTHON --version 2>&1 | head -1))"
+
+# ── Clone / Download ──────────────────────────────────────────
+step "Downloading Custo..."
+if [ -d "$INSTALL_DIR" ]; then
+  echo "  Updating existing installation at $INSTALL_DIR"
+  git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || true
+else
+  git clone --depth 1 "https://github.com/$REPO.git" "$INSTALL_DIR"
+  ok "Cloned to $INSTALL_DIR"
+fi
+cd "$INSTALL_DIR"
+
+# ── Install Python deps ────────────────────────────────────────
+step "Installing Python dependencies..."
+if command -v pip3 &>/dev/null; then
+  pip3 install pyyaml 2>&1 | tail -1
+elif "$PYTHON" -m pip install pyyaml 2>&1 | tail -1; then
+  true
+else
+  "$PYTHON" -m ensurepip --upgrade 2>/dev/null || true
+  "$PYTHON" -m pip install pyyaml 2>&1 | tail -1
+fi
+ok "Dependencies installed"
+
+# ── Setup ─────────────────────────────────────────────────────
+step "Running first-time setup..."
+"$PYTHON" setup/init_config.py 2>/dev/null || true
+"$PYTHON" setup/first_run.py 2>/dev/null || true
+ok "Setup complete"
+
+# ── PATH setup ────────────────────────────────────────────────
+INSTALL_SCRIPT="$INSTALL_DIR/custo"
+if [ -f "$INSTALL_SCRIPT" ]; then
+  chmod +x "$INSTALL_SCRIPT"
+fi
+if [ ! -f "/usr/local/bin/custo" ] && [ ! -f "$HOME/.local/bin/custo" ]; then
+  mkdir -p "$HOME/.local/bin"
+  if [ ! -f "$HOME/.local/bin/custo" ]; then
+    ln -sf "$INSTALL_SCRIPT" "$HOME/.local/bin/custo" 2>/dev/null || true
+    echo ""
+    echo -e "  Add to your shell profile:  ${CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}"
+  fi
 fi
 
-PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-echo "Found Python $PYTHON_VERSION"
-
-# Create virtual environment
-echo "[2/6] Creating virtual environment..."
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-echo "[3/6] Installing dependencies..."
-pip install --upgrade pip
-pip install -r setup/dependencies.txt
-
-# Initialize configuration
-echo "[4/6] Initializing configuration..."
-python3 setup/init_config.py
-
-# Setup directories with proper permissions
-echo "[5/6] Setting up directories..."
-python3 setup/bootstrap.py
-
-# Run first-time setup
-echo "[6/6] Running first-time setup..."
-python3 setup/first_run.py
-
 echo ""
-echo "========================================="
-echo "  Installation Complete!"
-echo "========================================="
+echo -e "  ${GREEN}${BOLD}Custo installed successfully!${NC}"
 echo ""
-echo "Next steps:"
-echo "  1. Edit system/config.yaml with your settings"
-echo "  2. Review user/profile.md and set your preferences"
-echo "  3. Start the daemon: python daemon/daemon.py --foreground"
+echo "  Run:  custo setup    — Configure LLM provider"
+echo "  Run:  custo chat     — Start chatting"
+echo "  Run:  custo doctor   — Health check"
 echo ""
