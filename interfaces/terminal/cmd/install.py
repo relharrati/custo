@@ -75,14 +75,11 @@ def cmd_onboard(args):
         # Stale install — show update instructions
         print_header("Custo Onboarding")
         print()
-        print("Welcome to Custo! Let's get you started.\n")
-        print("  Step 1: Update to latest →  custo upgrade")
-        print("  Step 2: Setup wizard      →  custo setup")
-        print("  Step 3: Start chatting    →  custo chat")
+        print("  To start the TUI setup wizard, update your installation:\n")
+        print("  > iwr -UseBasicParsing https://github.com/relharrati/custo/raw/master/setup/install.ps1 | iex")
         print()
-        print("Quick tips:")
-        print("  custo doctor   —  System health check")
-        print("  custo help     —  Show all commands")
+        print("  Or run the basic wizard:")
+        print("  > py setup/init_config.py --wizard")
 
 
 def cmd_init(args):
