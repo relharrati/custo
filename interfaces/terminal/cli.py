@@ -6,7 +6,72 @@ Routes commands to the appropriate module in interfaces/terminal/cmd/.
 
 import sys
 import importlib
+import json
+import os
+import subprocess
 from pathlib import Path
+from datetime import datetime, timedelta
+from typing import Optional
+
+
+# ── Auto-update check ────────────────────────────────────────
+# Runs on every command to check for newer GitHub releases.
+
+_UPDATE_CHECK_CACHE = None  # (timestamp, version_string) | None
+
+
+def _check_for_update() -> Optional[str]:
+    """
+    Quick check for newer version on GitHub.
+    Returns version string if update available, None otherwise.
+    Caches result for 1 hour.
+    """
+    global _UPDATE_CHECK_CACHE
+
+    if os.environ.get("CUSTO_SKIP_UPDATE_CHECK") == "1":
+        return None
+
+    now = datetime.now()
+    if _UPDATE_CHECK_CACHE is not None:
+        ts, ver = _UPDATE_CHECK_CACHE
+        if now - ts < timedelta(hours=1):
+            return ver
+
+    try:
+        from system.versions import VERSION as local_ver
+        import urllib.request
+        req = urllib.request.Request(
+            "https://api.github.com/repos/relharrati/custo/releases/latest",
+            headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "custo"}
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+            latest_tag = data.get("tag_name", "").lstrip("v")
+
+        if latest_tag and latest_tag > local_ver:
+            _UPDATE_CHECK_CACHE = (now, latest_tag)
+            return latest_tag
+
+        _UPDATE_CHECK_CACHE = (now, None)
+        return None
+
+    except Exception:
+        _UPDATE_CHECK_CACHE = (now, None)
+        return None
+
+
+def _prompt_upgrade(latest: str):
+    """Show update notice and offer to upgrade."""
+    from system.versions import VERSION as local_ver
+    print(f"\n  >> Update available: v{local_ver} -> v{latest}")
+    try:
+        response = input("  >> Upgrade now? [Y/n]: ").strip().lower()
+        if not response or response in ("y", "yes"):
+            from interfaces.terminal.cmd.install import cmd_upgrade
+            cmd_upgrade([])
+            print("  >> Upgrade complete! Please restart your command.")
+    except (EOFError, KeyboardInterrupt):
+        pass
 
 
 def print_general_help():
@@ -142,6 +207,15 @@ def main():
 
     command = args[0]
     subargs = args[1:]
+
+    # ── Auto-update check (skip for update/upgrade/version to avoid loops) ──
+    if command not in ("upgrade", "update", "version"):
+        try:
+            latest = _check_for_update()
+            if latest:
+                _prompt_upgrade(latest)
+        except Exception:
+            pass
 
     # ── DISPATCH TABLE ──────────────────────────────────────────
     # Each entry: (module_short_name, handler_fn_name)
