@@ -824,11 +824,11 @@ def run_tui_wizard():
         f"[{TEXT}]Welcome to Custo Setup.[/]\n\n"
         f"[{TEXT_DIM}]This wizard will guide you through configuring[/]\n"
         f"[{TEXT_DIM}]your autonomous digital operator in 5 phases.[/]\n\n"
-        f"[{EMERALD}]  Phase 1[/]  {TEXT_DIM}→[/]  Security & Safety Confirmation\n"
-        f"[{BLUE}]  Phase 2[/]    {TEXT_DIM}→[/]  Gateway Configuration\n"
-        f"[{TEAL}]  Phase 3[/]    {TEXT_DIM}→[/]  Model & API Authentication\n"
-        f"[{GREEN}]  Phase 4[/]   {TEXT_DIM}→[/]  Channel & Interface Integration\n"
-        f"[{PURPLE}]  Phase 5[/]  {TEXT_DIM}→[/]  Workspace & Skills Setup",
+        f"[{EMERALD}]  Phase 1[/]  [{TEXT_DIM}]→[/]  Security & Safety Confirmation\n"
+        f"[{BLUE}]  Phase 2[/]    [{TEXT_DIM}]→[/]  Gateway Configuration\n"
+        f"[{TEAL}]  Phase 3[/]    [{TEXT_DIM}]→[/]  Model & API Authentication\n"
+        f"[{GREEN}]  Phase 4[/]   [{TEXT_DIM}]→[/]  Channel & Interface Integration\n"
+        f"[{PURPLE}]  Phase 5[/]  [{TEXT_DIM}]→[/]  Workspace & Skills Setup",
         border_style=EMERALD, box=box.ROUNDED, padding=(1, 2)
     )
     console.print(Align.center(welcome))
