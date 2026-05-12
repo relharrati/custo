@@ -49,8 +49,8 @@ def first_run(root_path: str = None):
         print("  [INFO] No LLM model configured yet.")
         resp = input("  Run LLM setup wizard now? (recommended) [Y/n]: ").strip().lower()
         if not resp or resp in ("y", "yes"):
-            from setup.init_config import run_wizard
-            run_wizard(str(base))
+            from setup.tui_setup import run_tui_wizard
+            run_tui_wizard()
         else:
             print("  Skipping LLM setup. Run `py setup/init_config.py --wizard` later.")
 

@@ -24,6 +24,12 @@ def load_config(root_path: Path = None) -> Dict[str, Any]:
             "timezone": "Africa/Casablanca",
             "locale": "en-US"
         },
+        "gateway": {
+            "bind_address": "127.0.0.1",
+            "port": 18789,
+            "auth_mode": "none",
+            "daemon_install": False,
+        },
         "daemon": {
             "pid_dir": "daemon/pid",
             "log_dir": "logs",
@@ -50,16 +56,19 @@ def load_config(root_path: Path = None) -> Dict[str, Any]:
             "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         },
         "llm": {
-            "provider": "auto",  # "auto", "ollama", "lmstudio", "vllm", "hardcoded", "none"
-            "model": "",  # e.g. "qwen2.5-coder:1.5b", "gemma3:1b", "llama3.2:3b"
-            "auto_download": True,  # If True and model not present, download it automatically
+            "provider": "auto",
+            "model": "",
+            "auto_download": True,
             "context_window": 4096,
             "temperature": 0.7,
             "max_tokens": 512,
             "ollama_host": "http://127.0.0.1:11434",
             "lmstudio_host": "http://127.0.0.1:1234",
             "vllm_host": "http://127.0.0.1:8000"
-        }
+        },
+        "skills": {
+            "enabled": [],
+        },
     }
     
     if config_path.exists():

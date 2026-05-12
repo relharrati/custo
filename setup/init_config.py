@@ -319,21 +319,31 @@ def _run_vllm_wizard(ram_gb: int):
 
 
 def run_wizard(root_path: str = None) -> dict:
-    """Interactive LLM setup wizard. Returns updated llm config dict."""
+    """Interactive setup wizard. Uses TUI (rich) if available, falls back to basic."""
     base = Path(root_path or Path(__file__).parent.parent)
 
+    try:
+        from setup.tui_setup import run_tui_wizard
+        run_tui_wizard()
+        return {}
+    except ImportError:
+        # Fallback to basic LLM-only wizard
+        return _basic_llm_wizard(base)
+
+
+def _basic_llm_wizard(base: Path) -> dict:
+    """Basic LLM-only wizard for when rich is not available."""
     print("\n" + "=" * 60)
-    print("  Custo LLM Provider Setup")
+    print("  Custo LLM Provider Setup (basic)")
     print("=" * 60)
-    print()
-    print("Custo uses a language model to generate intelligent responses.")
-    print("Choose how you'd like to provide it:")
+    print("  Install rich for the full TUI: pip install rich prompt-toolkit")
     print()
 
     ram_gb = _detect_ram()
     print(f"  System RAM detected: ~{_ram_str(ram_gb)}")
 
     provider = _provider_menu()
+    llm_config = {"provider": "hardcoded", "model": "", "auto_download": False}
 
     if provider == "ollama":
         llm_config = _run_ollama_wizard(ram_gb)
@@ -342,25 +352,17 @@ def run_wizard(root_path: str = None) -> dict:
     elif provider == "vllm":
         llm_config = _run_vllm_wizard(ram_gb)
     else:
-        print("\n  Skipping LLM setup — Custo will use hardcoded responses.")
-        print("  You can configure an LLM later by editing system/config.yaml")
-        return {"provider": "hardcoded", "model": "", "auto_download": False}
+        print("\n  Skipping LLM setup — using hardcoded responses.")
 
-    # Save to config
     from system.config import load_config, save_config
     cfg = load_config(base)
-    cfg["llm"] = {**cfg.get("llm", {}), **llm_config, "context_window": 4096, "temperature": 0.7, "max_tokens": 512}
+    cfg["llm"] = {**cfg.get("llm", {}), **llm_config,
+                  "context_window": 4096, "temperature": 0.7, "max_tokens": 512}
     save_config(cfg, base)
 
-    print("\n" + "=" * 60)
-    print("  Configuration saved to system/config.yaml")
-    print("=" * 60)
     print()
-    print("  Provider:  ", llm_config["provider"])
-    print("  Model:     ", llm_config["model"])
-    print("  Auto-dl:   ", "Yes" if llm_config.get("auto_download") else "No")
-    print()
-    print("  Test it:   py custo chat  (then type 'hello')")
+    print("  Saved to system/config.yaml")
+    print("  Run 'py setup/init_config.py --wizard' for full TUI setup")
     print()
 
     return llm_config
@@ -379,7 +381,8 @@ def init_config(root_path: str = None, wizard: bool = False):
             return
 
     if wizard:
-        run_wizard(str(base))
+        from setup.tui_setup import run_tui_wizard
+        run_tui_wizard()
         return
 
     import yaml
