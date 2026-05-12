@@ -6,8 +6,8 @@
 # Linux / macOS
 curl -fsSL https://github.com/relharrati/custo/raw/master/setup/install.sh | sh
 
-# Windows PowerShell
-powershell -c "iex (iwr 'https://github.com/relharrati/custo/raw/master/setup/install.ps1')"
+# Windows PowerShell (run this directly in PowerShell, NOT wrapped in powershell -c)
+iwr -UseBasicParsing https://github.com/relharrati/custo/raw/master/setup/install.ps1 | iex
 
 # npm (requires Python 3.9+)
 npx custo chat

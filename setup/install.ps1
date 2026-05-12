@@ -66,15 +66,19 @@ if (Test-Path "$InstallDir") {
 }
 Set-Location $InstallDir
 
-# ── Install deps ──────────────────────────────────────────────
+# ── Install Python deps ──────────────────────────────────────
 Step "Installing Python dependencies..."
 try {
-    & $Python -m pip install pyyaml -q 2>&1 | Out-Null
+    & $Python -m pip install pyyaml 2>&1 | ForEach-Object { Write-Host "  $_" }
     Ok "Dependencies installed"
 } catch {
-    & $Python -m ensurepip --upgrade 2>$null
-    & $Python -m pip install pyyaml -q 2>&1 | Out-Null
-    Ok "Dependencies installed"
+    try {
+        & $Python -m ensurepip --upgrade 2>$null
+        & $Python -m pip install pyyaml 2>&1 | ForEach-Object { Write-Host "  $_" }
+        Ok "Dependencies installed"
+    } catch {
+        Write-Host "  Could not auto-install pyyaml. Run manually: $Python -m pip install pyyaml" -ForegroundColor Yellow
+    }
 }
 
 # ── Setup ─────────────────────────────────────────────────────
@@ -84,35 +88,28 @@ try { & $Python setup/first_run.py 2>$null } catch {}
 Ok "Setup complete"
 
 # ── Ensure custo is callable ─────────────────────────────────
-# Add a PowerShell function for the current session (no restart needed)
 $instDir = $InstallDir
 $custoBat = Join-Path $instDir "custo.bat"
-$custoPy = Join-Path $instDir "custo"
 
 if (Test-Path $custoBat) {
-    # Create a persistent PowerShell function
+    # PowerShell profile script for persistent alias
     $profileScript = @"
 
 # Custo CLI
-function custo { & "$custoBat" @args }
+Set-Alias custo "$custoBat"
 
 "@
-    # Add to current session
-    Remove-Item Function:custo -ErrorAction SilentlyContinue
-    New-Item -Path Function: -Name "custo" -Value { param([string[]]$a) & "$custoBat" @a } -Force | Out-Null
-    Write-Host "  ✓ 'custo' command ready in this session" -ForegroundColor Green
-
-    # Add to PowerShell profile for future sessions
+    # Write to user profile for future sessions
     $profileDir = Split-Path $PROFILE -Parent
     if (-not (Test-Path $profileDir)) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }
-    $existingProfile = if (Test-Path $PROFILE) { Get-Content $PROFILE -Raw } else { "" }
+    $existingProfile = if (Test-Path $PROFILE) { Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue } else { "" }
     if ($existingProfile -notlike "*custo*") {
         Add-Content -Path $PROFILE -Value $profileScript -Encoding UTF8
         Write-Host "  ✓ Added to PowerShell profile ($PROFILE)" -ForegroundColor Green
     }
 }
 
-# ── PATH (user-level, for non-PowerShell tools) ──────────────
+# ── PATH (user-level, for cmd.exe and future shells) ─────────
 $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 if ($userPath -notlike "*$instDir*") {
     $newPath = "$instDir;$userPath"
@@ -120,6 +117,13 @@ if ($userPath -notlike "*$instDir*") {
     Write-Host "  ✓ Added to user PATH (new terminals)" -ForegroundColor Green
 }
 $env:PATH = "$instDir;$env:PATH"
+
+# ── Instructions for the running session ────────────────────
+Write-Host ""
+Write-Host "  ⚠  To use 'custo' in this terminal:" -ForegroundColor Yellow
+Write-Host "     Set-Alias custo '$custoBat'" -ForegroundColor Cyan
+Write-Host "  Or open a new PowerShell window."
+Write-Host ""
 
 # ── Done ──────────────────────────────────────────────────────
 Write-Host ""
