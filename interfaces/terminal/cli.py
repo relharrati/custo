@@ -234,6 +234,7 @@ def main():
         "init":     ("install", "cmd_init"),
         "doctor":   ("install", "cmd_doctor"),
         "upgrade":  ("install", "cmd_upgrade"),
+         "uninstall": ("install", "cmd_uninstall"),
 
         # ── Sessions ──
         "sessions": ("sessions", "run"),

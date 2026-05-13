@@ -6,12 +6,13 @@ This script runs on first-time setup to:
 - Create initial user profile
 - Setup default projects
 - Configure initial preferences
-- Optionally run LLM provider wizard
+- Optionally run LLM provider wizard (arrow-key TUI)
 """
 
 import json
 import os
 import sys
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -33,38 +34,63 @@ def first_run(root_path: str = None):
         "memory/inbox",
         "sessions/daily",
     ]
+    missing = [p for p in required if not (base / p).exists()]
     for path in required:
-        if not (base / path).exists():
-            print(f"  WARNING: Missing {path}")
-    print("  Installation verified.")
+        if path in missing:
+            print(f"  \033[1;33mWARNING: Missing {path}\033[0m")
+    if not missing:
+        print("  \033[1;32m\u2713 Installation verified.\033[0m")
 
-    # Check if LLM is configured (if not, offer quick wizard)
+    # Check if LLM is configured
     from system.config import load_config
     cfg = load_config(base)
     llm_cfg = cfg.get("llm", {})
     provider = llm_cfg.get("provider", "").lower()
     model = llm_cfg.get("model", "").strip()
 
+    print("[2/5] Checking LLM configuration...")
     if provider in ("", "auto", "none") or not model:
         if os.environ.get("CUSTO_NONINTERACTIVE") == "1":
             print("  Skipping LLM wizard (non-interactive mode).")
             print("  Run 'custo setup' later to configure your LLM.")
         else:
-            print()
-            print("  [INFO] No LLM model configured yet.")
-            resp = input("  Run LLM setup wizard now? (recommended) [Y/n]: ").strip().lower()
-            if not resp or resp in ("y", "yes"):
-                from setup.tui_setup import run_tui_wizard
-                run_tui_wizard()
+            print("\n  \033[90mNo LLM model configured yet.\033[0m")
+            # Arrow-key selection for the prompt
+            try:
+                from setup.tui_setup import HAS_INQUIRER
+                if HAS_INQUIRER:
+                    from InquirerPy import inquirer
+                    run_wizard = inquirer.confirm(
+                        message="Run the full TUI setup wizard now? (recommended)",
+                        default=True,
+                    ).execute()
+                else:
+                    ans = input("  Run LLM setup wizard now? (recommended) [Y/n]: ").strip().lower()
+                    run_wizard = ans not in ("n", "no")
+            except Exception:
+                ans = input("  Run LLM setup wizard now? (recommended) [Y/n]: ").strip().lower()
+                run_wizard = ans not in ("n", "no")
+
+            if run_wizard:
+                try:
+                    from setup.tui_setup import run_tui_wizard
+                    run_tui_wizard()
+                except Exception as e:
+                    print(f"  \033[1;31mWizard failed ({e}). Running basic setup.\033[0m")
+                    _basic_fallback(base)
             else:
                 print("  Skipping LLM setup. Run `custo setup` later.")
+    else:
+        print(f"  \033[1;32m\u2713 LLM provider: {provider}\033[0m")
+        print(f"  \033[1;32m\u2713 Model: {model}\033[0m")
 
     # Create initial session
-    print("[2/5] Creating first session record...")
+    print("\n[3/5] Creating first session record...")
     sessions_dir = base / "sessions" / "daily" / datetime.now().strftime("%Y-%m-%d")
     sessions_dir.mkdir(parents=True, exist_ok=True)
     session_file = sessions_dir / "initial_session.md"
-    session_content = f"""---
+    if not session_file.exists():
+        session_content = f"""---
 title: First Session
 date: {datetime.now().isoformat()}
 type: initialization
@@ -87,30 +113,36 @@ Custo system initialized successfully.
 ## Linked Memories
 - [x] System bootstrap complete
 """
-    session_file.write_text(session_content)
-    print(f"  Session created: {session_file}")
+        session_file.write_text(session_content)
+        print(f"  \033[1;32m\u2713 Session created: {session_file}\033[0m")
+    else:
+        print(f"  \033[1;90mSession already exists.\033[0m")
 
     # Update index
-    print("[3/5] Updating session index...")
+    print("\n[4/5] Updating session index...")
     index_path = base / "sessions" / "index.json"
-    if index_path.exists():
+    if index_path.exists() and index_path.stat().st_size > 0:
         index = json.loads(index_path.read_text())
     else:
         index = {"sessions": [], "version": "1.0"}
 
-    index["sessions"].append({
+    entry = {
         "id": session_file.stem[:8],
         "date": datetime.now().strftime("%Y-%m-%d"),
         "path": str(session_file.relative_to(base)),
         "title": "First Session",
         "type": "initialization",
         "message_count": 1,
-    })
-    index_path.write_text(json.dumps(index, indent=2))
-    print("  Index updated.")
+    }
+    if entry not in index["sessions"]:
+        index["sessions"].append(entry)
+        index_path.write_text(json.dumps(index, indent=2))
+        print(f"  \033[1;32m\u2713 Index updated.\033[0m")
+    else:
+        print(f"  \033[1;90mEntry already in index.\033[0m")
 
     # Initialize user long-term memory
-    print("[4/5] Initializing user memory...")
+    print("\n[5/5] Initializing memory...")
     memory_path = base / "user" / "long_memory.md"
     if not memory_path.exists():
         memory_content = """# Long-term Memory
@@ -131,24 +163,15 @@ _No relationships recorded yet_
 ## Goals
 _No goals set yet_
 """
+        (memory_path.parent).mkdir(parents=True, exist_ok=True)
         memory_path.write_text(memory_content)
-        print(f"  Memory initialized: {memory_path}")
-
-    # Set up tasks
-    print("[5/5] Initializing task lists...")
-    today_tasks = base / "tasks" / "today.md"
-    if today_tasks.exists():
-        content = today_tasks.read_text()
-        if "[x] Complete first-run setup" not in content:
-            updated = content.replace(
-                "- [ ] Complete first-run setup",
-                "- [x] Complete first-run setup"
-            )
-            today_tasks.write_text(updated)
+        print(f"  \033[1;32m\u2713 Memory initialized.\033[0m")
+    else:
+        print(f"  \033[1;90mMemory already exists.\033[0m")
 
     print()
     print("=" * 50)
-    print("  Setup Complete!")
+    print("  \033[1;32m\u2713 Setup Complete!\033[0m")
     print("=" * 50)
     print()
     print("Your Custo instance is ready.")
@@ -156,10 +179,37 @@ _No goals set yet_
     print("Next steps:")
     print("  1. Edit system/config.yaml to customize settings")
     print("  2. Complete your profile in user/profile.md")
-    print("  3. Start the daemon: python daemon/daemon.py --foreground")
+    print("  3. Start chatting:     custo chat")
+    print("  4. Start daemon:       custo daemon start")
+    print("  5. View all commands:  custo help")
     print()
-    print("Type 'custo help' for available commands (once CLI is set up).")
-    print()
+
+
+def _basic_fallback(base):
+    """Minimal fallback when the TUI wizard isn't available."""
+    print("\n  Running basic LLM setup...")
+    from setup.init_config import _detect_ram, _provider_menu, _basic_llm_wizard
+    ram_gb = _detect_ram()
+    print(f"  Detected RAM: ~{ram_gb} GB")
+    provider = _provider_menu()
+    llm_config = {"provider": "hardcoded", "model": "", "auto_download": False}
+
+    if provider == "ollama":
+        from setup.init_config import _run_ollama_wizard
+        llm_config = _run_ollama_wizard(ram_gb)
+    elif provider == "lmstudio":
+        from setup.init_config import _run_lmstudio_wizard
+        llm_config = _run_lmstudio_wizard(ram_gb)
+    elif provider == "vllm":
+        from setup.init_config import _run_vllm_wizard
+        llm_config = _run_vllm_wizard(ram_gb)
+
+    from system.config import load_config, save_config
+    cfg = load_config(base)
+    cfg["llm"] = {**cfg.get("llm", {}), **llm_config,
+                  "context_window": 4096, "temperature": 0.7, "max_tokens": 512}
+    save_config(cfg, base)
+    print("\n  Saved to system/config.yaml")
 
 
 if __name__ == "__main__":

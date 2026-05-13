@@ -1,7 +1,8 @@
 """
 Initialize Configuration - First-run Configuration Generator
 
-Extended with interactive LLM provider and model selection wizard.
+Extended with interactive LLM provider and model selection wizard
+(arrow-key TUI via InquirerPy).
 """
 
 import json
@@ -56,14 +57,49 @@ DEFAULT_CONFIG = {
     }
 }
 
+
+def load_config(root_path: Path = None) -> dict:
+    """Load system configuration from YAML, with defaults."""
+    base = Path(root_path or Path(__file__).parent.parent)
+    config_path = base / "system" / "config.yaml"
+
+    if config_path.exists():
+        try:
+            user_config = yaml.safe_load(config_path.read_text())
+            return _deep_merge(DEFAULT_CONFIG, user_config or {})
+        except Exception as e:
+            print(f"[CONFIG] Warning: Could not parse config.yaml: {e}")
+            print("[CONFIG] Using defaults")
+
+    return DEFAULT_CONFIG.copy()
+
+
+def _deep_merge(base: dict, update: dict) -> dict:
+    """Recursively merge update dict into base dict."""
+    result = base.copy()
+    for key, value in update.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def save_config(config: dict, root_path: Path = None):
+    """Save configuration to YAML file."""
+    base = Path(root_path or Path(__file__).parent.parent)
+    config_path = base / "system" / "config.yaml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
+
+
 # ---------------------------------------------------------------------------
-# LLM wizard helpers
+# LLM wizard helpers (kept for basic fallback)
 # ---------------------------------------------------------------------------
 
 def _detect_ram() -> int:
     """Best-effort RAM detection in GB."""
     try:
-        import os
         if os.name == "nt":
             import ctypes
             class MEMORYSTATUSEX(ctypes.Structure):
@@ -76,39 +112,41 @@ def _detect_ram() -> int:
             stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
             return max(1, int(stat.ullTotalPhys / (1024**3)))
-        else:
-            try:
-                with open("/proc/meminfo") as f:
-                    for line in f:
-                        if line.startswith("MemTotal:"):
-                            kB = int(line.split()[1])
-                            return max(1, int(kB / 1024 / 1024 + 0.5))
-            except FileNotFoundError:
-                import subprocess
-                r = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=3)
-                if r.returncode == 0:
-                    return max(1, int(int(r.stdout.strip()) / (1024**3)))
+        elif sys.platform.startswith("linux"):
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        kB = int(line.split()[1])
+                        return max(1, int(kB / 1024 / 1024 + 0.5))
+        elif sys.platform == "darwin":
+            import subprocess
+            r = subprocess.run(["sysctl", "-n", "hw.memsize"],
+                               capture_output=True, text=True, timeout=3)
+            if r.returncode == 0:
+                return max(1, int(int(r.stdout.strip()) / (1024**3)))
     except Exception:
         pass
-    return 0  # unknown
+    return 4
 
 
 def _provider_menu():
     """Display provider choice menu."""
     print("\nChoose an LLM provider:")
-    print("  1) Ollama       — Recommended. Easy setup, auto-download, runs locally")
-    print("  2) LM Studio    — GUI app, loads any GGUF model, OpenAI-compatible")
-    print("  3) vLLM         — High-throughput server (GPU/CPU), for advanced users")
-    print("  4) Skip / use hardcoded responses (bootstrap mode)")
+    print("  1) Ollama       — Recommended. Easy setup, runs locally")
+    print("  2) OpenAI API")
+    print("  3) Anthropic API")
+    print("  4) LM Studio    — GUI app, loads any GGUF model")
+    print("  5) Skip / use hardcoded responses (bootstrap mode)")
     print()
-    choices = {"1": "ollama", "2": "lmstudio", "3": "vllm", "4": "hardcoded"}
+    choices = {"1": "ollama", "2": "openai", "3": "anthropic",
+               "4": "lm-studio", "5": "hardcoded"}
     while True:
-        sel = input("Select [1-4] (default: 1 - Ollama): ").strip()
+        sel = input("Select [1-5] (default: 1 - Ollama): ").strip()
         if not sel:
             sel = "1"
         if sel in choices:
             return choices[sel]
-        print("  Invalid choice. Enter 1, 2, 3 or 4.")
+        print("  Invalid choice. Enter 1-5.")
 
 
 def _ram_str(ram_gb: int) -> str:
@@ -140,12 +178,11 @@ def _display_model_menu(provider: str, ram_gb: int):
     print()
 
     tiers_dict = OllamaProvider.recommend_models(ram_gb)
-    # Convert dict to ordered list
     tier_order = ["minimal", "small", "medium", "large"]
     tier_labels = {
         "minimal": "Minimal models (< 2GB RAM)",
-        "small": "Small models (2–8GB RAM)",
-        "medium": "Medium models (8–24GB RAM)",
+        "small": "Small models (2-8GB RAM)",
+        "medium": "Medium models (8-24GB RAM)",
         "large": "Large models (24GB+ RAM)",
     }
 
@@ -157,8 +194,8 @@ def _display_model_menu(provider: str, ram_gb: int):
             continue
         print(f"  [{tier_key.upper()}] {tier_labels[tier_key]}")
         for model_id, name, size, note in models:
-            print(f"      {idx}) {name:30s} {size:10s}  — {note}")
-            options.append(model_id)
+            print(f"      {idx}) {name:30s} {size:10s}  -- {note}")
+            options.append((model_id, name))
             idx += 1
         print()
 
@@ -181,7 +218,7 @@ def _ask_auto_download() -> bool:
 
 
 def _run_ollama_wizard(ram_gb: int):
-    """Interactive Ollama provider setup."""
+    """Interactive Ollama provider setup (basic fallback)."""
     print("\n" + "=" * 55)
     print("  Ollama Provider Setup")
     print("=" * 55)
@@ -190,40 +227,39 @@ def _run_ollama_wizard(ram_gb: int):
     print("  https://ollama.ai and download for your platform.")
     print()
 
-    # Check if Ollama is installed/running
     import subprocess
     try:
         subprocess.run(["ollama", "--version"], capture_output=True, timeout=3)
         print("  [OK] Ollama CLI found")
         try:
+            import urllib.request
             urllib.request.urlopen("http://127.0.0.1:11434", timeout=2)
             print("  [OK] Ollama daemon reachable at http://127.0.0.1:11434")
         except Exception:
-            print("  [WARN] Ollama daemon not running — start it with `ollama serve` in another terminal")
+            print("  [WARN] Ollama daemon not running -- start with `ollama serve`")
     except FileNotFoundError:
-        print("  [WARN] Ollama not installed — install from https://ollama.ai first")
+        print("  [WARN] Ollama not installed -- install from https://ollama.ai first")
 
-    # Show model menu
     options = _display_model_menu("ollama", ram_gb)
 
     print()
-    print("  Choose a model to use:")
-    print("    Press a number for that model, or press Enter for the recommended default.")
+    print("  Choose a model:")
+    print("    Press a number, or Enter for the recommended default.")
     while True:
-        sel = input(f"  Selection [1–{len(options)}] (default: 1): ").strip()
+        sel = input(f"  Selection [1-{len(options)}] (default: 1): ").strip()
         if not sel:
             model_id, name = options[0]
-            print(f"  → Using: {name} ({model_id})")
+            print(f"  -> Using: {name} ({model_id})")
             break
         try:
             n = int(sel)
             if 1 <= n <= len(options):
                 model_id, name = options[n - 1]
-                print(f"  → Using: {name} ({model_id})")
+                print(f"  -> Using: {name} ({model_id})")
                 break
         except ValueError:
             pass
-        print(f"  Invalid — enter 1–{len(options)} or Enter for default")
+        print(f"  Invalid -- enter 1-{len(options)} or Enter for default")
 
     auto_dl = _ask_auto_download()
 
@@ -236,77 +272,69 @@ def _run_ollama_wizard(ram_gb: int):
 
 
 def _run_lmstudio_wizard(ram_gb: int):
-    """Interactive LM Studio provider setup."""
+    """Interactive LM Studio provider setup (basic fallback)."""
     print("\n" + "=" * 55)
     print("  LM Studio Provider Setup")
     print("=" * 55)
     print()
     print("  LM Studio is a desktop GUI for loading GGUF models.")
     print("  Download from https://lmstudio.ai and start the local server")
-    print("  (Server tab → Start Server).")
+    print("  (Server tab -> Start Server).")
     print()
 
-    # Check for reachable LM Studio server
     try:
+        import urllib.request
         urllib.request.urlopen("http://127.0.0.1:1234/v1/models", timeout=2)
         print("  [OK] LM Studio server is running at http://127.0.0.1:1234")
     except Exception:
-        print("  [INFO] No LM Studio server detected — you'll need to start it")
-        print("         (open LM Studio → select a model → Server tab → Start)")
+        print("  [INFO] No LM Studio server detected -- start it from the app")
 
     print()
-    print("  Recommended GGUF models for your RAM:")
-    print("  (Enter the exact model filename you'll load in LM Studio)")
-    print()
-    print(f"    ~{_ram_str(ram_gb)} → try:")
     if ram_gb >= 8:
-        print("       • llama3.2:3b (lightweight, good)")
-        print("       • qwen2.5-coder:7b (strong for code)")
+        print("  Models to try: llama3.2:3b, qwen2.5-coder:7b")
         default_model = "llama3.2"
     elif ram_gb >= 4:
-        print("       • llama3.2:3b (fits in ~2GB)")
-        print("       • gemma3:2b (fast)")
+        print("  Models to try: llama3.2:3b, gemma3:2b")
         default_model = "llama3.2"
     else:
-        print("       • phi4-mini:3b (2.1GB)")
-        print("       • tinyllama:1b (600MB)")
+        print("  Models to try: phi4-mini:3b, tinyllama:1b")
         default_model = "phi4-mini"
 
     model_input = input(f"\n  Model name (default: {default_model}): ").strip()
     model = model_input or default_model
-    print(f"  → Using model: {model}")
+    print(f"  -> Using model: {model}")
 
     return {
-        "provider": "lmstudio",
+        "provider": "lm-studio",
         "model": model,
-        "auto_download": False,  # LM Studio handles downloads manually
+        "auto_download": False,
         "lmstudio_host": "http://127.0.0.1:1234"
     }
 
 
 def _run_vllm_wizard(ram_gb: int):
-    """Interactive vLLM provider setup (advanced)."""
+    """Interactive vLLM provider setup (basic fallback, advanced)."""
     print("\n" + "=" * 55)
     print("  vLLM Provider Setup (Advanced)")
     print("=" * 55)
     print()
     print("  vLLM is a high-throughput LLM serving engine.")
-    print("  Requires a model in supported format and typically a GPU.")
+    print("  Requires a model in supported format, typically GPU.")
     print("  See: https://docs.vllm.ai")
     print()
 
-    model = input("  Model (HuggingFace ID, e.g. meta-llama/Llama-3.2-3B-Instruct): ").strip()
+    model = input("  Model (HF ID, e.g. meta-llama/Llama-3.2-3B-Instruct): ").strip()
     if not model:
-        print("  [WARN] No model specified — falling back to hardcoded provider")
+        print("  [WARN] No model specified -- falling back to hardcoded")
         return {"provider": "hardcoded"}
 
     host = input("  Server host (default: http://127.0.0.1:8000): ").strip()
     if not host:
         host = "http://127.0.0.1:8000"
 
-    print(f"  → Provider: vLLM")
-    print(f"  → Model: {model}")
-    print(f"  → Host: {host}")
+    print(f"  -> Provider: vLLM")
+    print(f"  -> Model: {model}")
+    print(f"  -> Host: {host}")
     print()
     print("  [NOTE] You must start the vLLM server separately:")
     print(f"    python -m vllm.entrypoints.openai.api_server --model {model}")
@@ -320,7 +348,11 @@ def _run_vllm_wizard(ram_gb: int):
 
 
 def run_wizard(root_path: str = None) -> dict:
-    """Interactive setup wizard. Uses TUI (rich) if available, falls back to basic."""
+    """
+    Run the full interactive TUI setup wizard.
+    Delegates to setup.tui_setup.run_tui_wizard() which uses InquirerPy.
+    Falls back to basic text prompts if InquirerPy is missing.
+    """
     base = Path(root_path or Path(__file__).parent.parent)
 
     try:
@@ -328,16 +360,15 @@ def run_wizard(root_path: str = None) -> dict:
         run_tui_wizard()
         return {}
     except ImportError:
-        # Fallback to basic LLM-only wizard
         return _basic_llm_wizard(base)
 
 
 def _basic_llm_wizard(base: Path) -> dict:
-    """Basic LLM-only wizard for when rich is not available."""
+    """Basic text-only LLM wizard when rich/InquirerPy unavailable."""
     print("\n" + "=" * 60)
     print("  Custo LLM Provider Setup (basic)")
     print("=" * 60)
-    print("  Install rich for the full TUI: pip install rich prompt-toolkit")
+    print("  Install InquirerPy for the full TUI: pip install rich prompt-toolkit")
     print()
 
     ram_gb = _detect_ram()
@@ -348,17 +379,24 @@ def _basic_llm_wizard(base: Path) -> dict:
 
     if provider == "ollama":
         llm_config = _run_ollama_wizard(ram_gb)
-    elif provider == "lmstudio":
+    elif provider == "lm-studio":
         llm_config = _run_lmstudio_wizard(ram_gb)
     elif provider == "vllm":
         llm_config = _run_vllm_wizard(ram_gb)
+    elif provider == "openai":
+        key = input("  Enter OpenAI API key: ").strip()
+        llm_config = {"provider": "openai", "model": "gpt-4o-mini",
+                       "auto_download": False, "api_key": key}
+    elif provider == "anthropic":
+        key = input("  Enter Anthropic API key: ").strip()
+        llm_config = {"provider": "anthropic", "model": "claude-3-haiku-20240307",
+                       "auto_download": False, "api_key": key}
     else:
-        print("\n  Skipping LLM setup — using hardcoded responses.")
+        print("\n  Skipping LLM setup -- using hardcoded responses.")
 
-    from system.config import load_config, save_config
     cfg = load_config(base)
     cfg["llm"] = {**cfg.get("llm", {}), **llm_config,
-                  "context_window": 4096, "temperature": 0.7, "max_tokens": 512}
+                   "context_window": 4096, "temperature": 0.7, "max_tokens": 512}
     save_config(cfg, base)
 
     print()
@@ -370,7 +408,7 @@ def _basic_llm_wizard(base: Path) -> dict:
 
 
 def init_config(root_path: str = None, wizard: bool = False):
-    """Initialize configuration file. Use --wizard flag for interactive LLM setup."""
+    """Initialize configuration file. Use --wizard flag for full TUI setup."""
     base = Path(root_path or Path(__file__).parent.parent)
     config_path = base / "system" / "config.yaml"
 
@@ -379,24 +417,37 @@ def init_config(root_path: str = None, wizard: bool = False):
             print(f"[CONFIG] Config exists at {config_path} (keeping existing)")
             return
         print(f"[CONFIG] Config already exists at {config_path}")
-        response = input("Overwrite? (y/N): ").strip().lower()
-        if response != 'y':
+        # Try InquirerPy confirm first
+        try:
+            from InquirerPy import inquirer
+            overwrite = inquirer.confirm(
+                message="Overwrite existing config?",
+                default=False,
+            ).execute()
+        except Exception:
+            response = input("Overwrite? (y/N): ").strip().lower()
+            overwrite = response == 'y'
+        if not overwrite:
             print("[CONFIG] Aborted.")
             return
 
     if wizard:
-        from setup.tui_setup import run_tui_wizard
-        run_tui_wizard()
+        run_wizard(base)
         return
 
-    import yaml
+    # Non-interactive: write defaults
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(yaml.dump(DEFAULT_CONFIG, default_flow_style=False, sort_keys=False))
     print(f"[CONFIG] Configuration written to {config_path}")
 
 
 if __name__ == "__main__":
-    import sys
-    if "--wizard" in sys.argv:
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--wizard", action="store_true", help="Run full interactive setup wizard")
+    args = parser.parse_args()
+
+    if args.wizard:
         run_wizard()
     else:
         init_config()
