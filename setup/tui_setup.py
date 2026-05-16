@@ -282,9 +282,20 @@ def _build_provider_list(models_data):
 
     # Add API providers from models.dev
     if models_data:
-        all_models = models_data.get("models", {})
+        # Handle both dict and list formats
+        all_models = {}
+        if isinstance(models_data, dict):
+            all_models = models_data.get("models", models_data.get("data", {}))
+            # If it's a list, convert to dict
+            if isinstance(all_models, list):
+                all_models = {m.get("id", m.get("name", str(i))): m for i, m in enumerate(all_models)}
+        elif isinstance(models_data, list):
+            all_models = {m.get("id", m.get("name", str(i))): m for i, m in enumerate(models_data)}
+
         seen_api = set()
         for mid, mdef in all_models.items():
+            if not isinstance(mdef, dict):
+                continue
             # Skip local-run models (already handled by local providers)
             if mdef.get("local_run", False):
                 continue
@@ -323,6 +334,8 @@ def _build_provider_list(models_data):
                 api_id = "novita"
             elif any(p in vendor for p in ("replicate",)):
                 api_id = "replicate"
+            elif any(p in vendor for p in ("openrouter",)):
+                api_id = "openrouter"
 
             if api_id and api_id not in seen_api:
                 seen_api.add(api_id)
@@ -368,8 +381,20 @@ def _get_models_for_provider(provider_id, models_data, ram_gb, vram_gb):
 
     return results
 
+def _normalize_models_data(models_data):
+    """Convert models.dev response to a consistent dict format."""
+    if not models_data:
+        return {}
+    if isinstance(models_data, dict):
+        all_models = models_data.get("models", models_data.get("data", {}))
+        if isinstance(all_models, list):
+            return {m.get("id", m.get("name", str(i))): m for i, m in enumerate(all_models)}
+        return all_models if isinstance(all_models, dict) else {}
+    if isinstance(models_data, list):
+        return {m.get("id", m.get("name", str(i))): m for i, m in enumerate(models_data)}
+    return {}
+
 def _get_ollama_models(models_data, ram_gb, vram_gb):
-    """Get Ollama-compatible models, filtered by RAM/VRAM."""
     results = []
     SIZE_MAP = {
         "0.5b": "~500 MB", "1b": "~670 MB", "1.5b": "~1.1 GB", "2b": "~1.5 GB",
@@ -398,7 +423,7 @@ def _get_ollama_models(models_data, ram_gb, vram_gb):
             return True
 
     if models_data:
-        all_models = models_data.get("models", {})
+        all_models = _normalize_models_data(models_data)
         for mid, mdef in all_models.items():
             if not mdef.get("local_run", False):
                 continue
@@ -463,7 +488,7 @@ def _get_lm_studio_models(models_data, ram_gb, vram_gb):
     """Get LM Studio compatible models (GGUF format)."""
     results = []
     if models_data:
-        all_models = models_data.get("models", {})
+        all_models = _normalize_models_data(models_data)
         for mid, mdef in all_models.items():
             if not mdef.get("local_run", False):
                 continue
@@ -481,7 +506,7 @@ def _get_vllm_models(models_data, ram_gb, vram_gb):
     """Get vLLM compatible models (HuggingFace format)."""
     results = []
     if models_data:
-        all_models = models_data.get("models", {})
+        all_models = _normalize_models_data(models_data)
         for mid, mdef in all_models.items():
             if not mdef.get("local_run", False):
                 continue
@@ -513,7 +538,7 @@ def _get_api_models(provider_id, models_data):
     """Get models for an API provider."""
     results = []
     if models_data:
-        all_models = models_data.get("models", {})
+        all_models = _normalize_models_data(models_data)
         for mid, mdef in all_models.items():
             vendor = mdef.get("vendor", "").lower()
             family = mdef.get("family", "").lower()
@@ -567,7 +592,7 @@ def _get_generic_models(provider_id, models_data):
     """Generic model fetch for unknown providers."""
     results = []
     if models_data:
-        all_models = models_data.get("models", {})
+        all_models = _normalize_models_data(models_data)
         for mid, mdef in all_models.items():
             vendor = mdef.get("vendor", "").lower()
             if provider_id.lower() in vendor:
@@ -646,14 +671,22 @@ def _confirm_prompt(message, default=True):
     return ans not in ("n", "no") if default else ans in ("y", "yes")
 
 def _select_prompt(message, choices, default=None):
+    """
+    Interactive select. Returns the VALUE (second element) of the chosen tuple.
+    Choices format: [(display_label, value), ...]
+    """
     if HAS_INQUIRER:
-        return inquirer.select(
+        result = inquirer.select(
             message=message,
             choices=choices,
             default=default,
             style=custom_style(),
             instruction="  (↑↓ to move, Enter to select)",
         ).execute()
+        # InquirerPy may return the full tuple or just the value
+        if isinstance(result, tuple):
+            return result[1] if len(result) >= 2 else result[0]
+        return result
     else:
         print(f"\n  {message}")
         for i, (label, val) in enumerate(choices, 1):
@@ -661,7 +694,8 @@ def _select_prompt(message, choices, default=None):
         while True:
             raw = input(f"  Select [1-{len(choices)}] (default: 1): ").strip()
             if not raw:
-                return default if default else choices[0][1]
+                chosen = default if default else choices[0][1]
+                return chosen[1] if isinstance(chosen, tuple) else chosen
             try:
                 n = int(raw)
                 if 1 <= n <= len(choices):
@@ -773,7 +807,15 @@ def phase_2_system_detection():
         input("  Press Enter to continue...")
 
 def phase_3_provider_model():
-    """Phase 3: Pick provider + model from models.dev."""
+    """
+    Phase 3: Pick provider → API key (if needed) → pick model → confirm.
+    Flow:
+      1. List all providers (from models.dev + known locals) → select one
+      2. If API provider → enter API key
+      3. Show models for that provider → select one
+      4. Auto-download prompt (local only)
+      5. Continue to next phase
+    """
     clear()
     print(LOGO)
     print("  \033[1;34m▸ Phase 3: LLM Provider & Model\033[0m")
@@ -792,43 +834,73 @@ def phase_3_provider_model():
         print("  \033[1;33m⚠ Using local model fallback\033[0m")
     print()
 
-    # Build provider list
+    # ── Step 1: Select Provider ─────────────────────────────
     providers = _build_provider_list(models_data)
     provider_choices = [
         (f"{p['icon']}  {p['name']} — {p['desc']}", p["id"])
         for p in providers
     ]
 
-    # Default to ollama
-    default_provider = "ollama"
-    provider_id = _select_prompt("Pick your LLM provider:", provider_choices, default=default_provider)
+    provider_id = _select_prompt("Pick your LLM provider:", provider_choices, default="ollama")
     STATE["provider"] = provider_id
+    print(f"\n  \033[1;32m✓ Provider: {provider_id}\033[0m")
 
-    # Handle skip
+    # ── Handle Skip ─────────────────────────────────────────
     if provider_id == "skip":
         STATE["model"] = ""
+        STATE["model_display"] = "Hardcoded responses"
+        STATE["model_size"] = "N/A"
         STATE["auto_download"] = False
-        print("\n  \033[90mSkipping LLM setup — hardcoded responses will be used.\033[0m")
+        print("  \033[90mSkipping LLM — hardcoded responses will be used.\033[0m")
         if not HAS_INQUIRER:
             input("  Press Enter to continue...")
         return
 
-    # Get models for this provider
+    # ── Step 2: API Key (for API providers) ─────────────────
+    if provider_id in API_ONLY_PROVIDERS:
+        print()
+        print(f"  \033[1;97mConfigure {provider_id.title()} API Key\033[0m")
+        print(f"  \033[90mGet your key from https://{provider_id}.com/settings/api\033[0m")
+        print()
+        api_key = _input_prompt(
+            f"Enter your {provider_id.title()} API key:",
+            default="",
+            validate=lambda _, x: (True, "") if x == "" or len(x) >= 8 else (False, "Key must be at least 8 characters")
+        )
+        if api_key and len(api_key) >= 8:
+            STATE["api_key"] = api_key
+            print(f"  \033[1;32m✓ {provider_id.title()} API key configured\033[0m")
+        else:
+            print(f"  \033[1;33m⚠ No API key set — you can add it later in system/config.yaml\033[0m")
+        STATE["auto_download"] = False
+    else:
+        STATE["auto_download"] = True
+
+    # ── Step 3: Select Model ────────────────────────────────
+    print()
     ram = STATE["ram_gb"]
     vram = STATE["vram_gb"]
     models = _get_models_for_provider(provider_id, models_data, ram, vram)
 
     if not models:
-        print(f"\n  \033[1;33m⚠ No models found for {provider_id}\033[0m")
+        print(f"  \033[1;33m⚠ No models found for {provider_id}\033[0m")
         if not HAS_INQUIRER:
             input("  Press Enter to continue...")
         return
 
     model_choices = [(f"{name} ({size}) — {note}", mid) for mid, name, size, note in models]
 
-    # Auto-select first model that fits
-    default_model = models[0][0] if models else None
-    model_id = _select_prompt("Pick a model:", model_choices, default=default_model)
+    # Show RAM/VRAM hint for local providers
+    is_local = provider_id in LOCAL_PROVIDERS
+    if is_local:
+        effective = vram if vram > 0 else ram
+        if effective < 4:
+            print(f"  \033[1;33m⚠ Only {effective}GB memory — smaller models recommended\033[0m")
+        elif effective < 8:
+            print(f"  \033[1;90m{effective}GB memory — models up to ~3B will run well\033[0m")
+        print()
+
+    model_id = _select_prompt("Pick a model:", model_choices, default=models[0][0])
     STATE["model"] = model_id
 
     # Store display info
@@ -838,25 +910,17 @@ def phase_3_provider_model():
             STATE["model_size"] = size
             break
 
-    print()
+    print(f"\n  \033[1;32m✓ Model: {STATE['model_display']} ({STATE['model_size']})\033[0m")
 
-    # Auto-download prompt (only for local providers)
-    is_local = provider_id in LOCAL_PROVIDERS
+    # ── Step 4: Auto-download (local providers only) ────────
     if is_local:
-        auto_dl = _confirm_prompt("Auto-download model if not installed?", default=True)
-        STATE["auto_download"] = auto_dl
-    else:
-        STATE["auto_download"] = False
-        print("  \033[90mAPI provider — no local download needed.\033[0m")
-        print("  \033[90mYou'll need to configure your API key later.\033[0m")
-
-    # API key prompt for API providers
-    if provider_id in API_ONLY_PROVIDERS:
         print()
-        api_key = _input_prompt(f"Enter your {provider_id.title()} API key (optional, can set later):", default="")
-        if api_key and len(api_key) >= 8:
-            STATE["api_key"] = api_key
-            print("  \033[1;32m✓ API key configured\033[0m")
+        auto_dl = _confirm_prompt("Auto-download model during setup?", default=True)
+        STATE["auto_download"] = auto_dl
+        if auto_dl:
+            print("  \033[90mModel will be downloaded in Phase 6.\033[0m")
+        else:
+            print("  \033[90mYou can download it later with the provider's CLI.\033[0m")
 
     print()
     if not HAS_INQUIRER:
