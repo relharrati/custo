@@ -89,18 +89,18 @@ STATE = {
 def custom_style():
     """Return an InquirerPy style object."""
     from InquirerPy import get_style
-    return get_style([
-        ("questionmark", "hidden"),
-        ("question", "#2dd4bf bold"),
-        ("pointer", "#818cf8"),
-        ("highlighted", "#818cf8 bold"),
-        ("selected", "#34d399"),
-        ("answer", "#a78bfa bold"),
-        ("instruction", "#64748b"),
-        ("separator", "#475569"),
-        ("checkbox", "#818cf8"),
-        ("checkbox-checked", "#34d399"),
-    ])
+    return get_style({
+        "questionmark": "hidden",
+        "question": "#2dd4bf bold",
+        "pointer": "#818cf8",
+        "highlighted": "#818cf8 bold",
+        "selected": "#34d399",
+        "answer": "#a78bfa bold",
+        "instruction": "#64748b",
+        "separator": "#475569",
+        "checkbox": "#818cf8",
+        "checkbox-checked": "#34d399",
+    })
 
 # ── Logo ────────────────────────────────────────────────────
 
