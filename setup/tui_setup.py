@@ -646,7 +646,14 @@ def _checkbox_prompt(message, choices, default=None):
             style=style,
             instruction="  (↑↓ move, Space toggle, Enter confirm)",
         ).execute()
-        return selected
+        # InquirerPy returns list of tuples — extract values
+        result = []
+        for item in selected:
+            if isinstance(item, (list, tuple)):
+                result.append(item[1] if len(item) >= 2 else item[0])
+            else:
+                result.append(item)
+        return result
     else:
         print(f"\n  {message}")
         for i, (label, _) in enumerate(choices, 1):
@@ -672,7 +679,7 @@ def _confirm_prompt(message, default=True):
 
 def _select_prompt(message, choices, default=None):
     """
-    Interactive select. Returns the VALUE (second element) of the chosen tuple.
+    Interactive select. Always returns the VALUE (second element).
     Choices format: [(display_label, value), ...]
     """
     if HAS_INQUIRER:
@@ -683,8 +690,8 @@ def _select_prompt(message, choices, default=None):
             style=custom_style(),
             instruction="  (↑↓ to move, Enter to select)",
         ).execute()
-        # InquirerPy may return the full tuple or just the value
-        if isinstance(result, tuple):
+        # InquirerPy returns the full tuple — extract value
+        if isinstance(result, (list, tuple)):
             return result[1] if len(result) >= 2 else result[0]
         return result
     else:
@@ -695,7 +702,7 @@ def _select_prompt(message, choices, default=None):
             raw = input(f"  Select [1-{len(choices)}] (default: 1): ").strip()
             if not raw:
                 chosen = default if default else choices[0][1]
-                return chosen[1] if isinstance(chosen, tuple) else chosen
+                return chosen[1] if isinstance(chosen, (list, tuple)) else chosen
             try:
                 n = int(raw)
                 if 1 <= n <= len(choices):
@@ -757,8 +764,11 @@ def phase_1_verify_installation():
             sys.exit(0)
 
     print()
-    if not HAS_INQUIRER:
-        input("  Press Enter to continue...")
+    print("  Press Enter to continue...")
+    if HAS_INQUIRER:
+        inquirer.confirm(message="", default=True, style=custom_style()).execute()
+    else:
+        input()
 
 def phase_2_system_detection():
     """Phase 2: Detect RAM, VRAM, OS, Python."""
@@ -803,8 +813,11 @@ def phase_2_system_detection():
         print("  \033[1;31m✗ Very limited — consider API providers\033[0m")
 
     print()
-    if not HAS_INQUIRER:
-        input("  Press Enter to continue...")
+    print("  Press Enter to continue...")
+    if HAS_INQUIRER:
+        inquirer.confirm(message="", default=True, style=custom_style()).execute()
+    else:
+        input()
 
 def phase_3_provider_model():
     """
@@ -859,17 +872,17 @@ def phase_3_provider_model():
     # ── Step 2: API Key (for API providers) ─────────────────
     if provider_id in API_ONLY_PROVIDERS:
         print()
-        print(f"  \033[1;97mConfigure {provider_id.title()} API Key\033[0m")
-        print(f"  \033[90mGet your key from https://{provider_id}.com/settings/api\033[0m")
+        print(f"  \033[1;97mConfigure {str(provider_id).title()} API Key\033[0m")
+        print(f"  \033[90mGet your key from https://{str(provider_id).lower()}.com/settings/api\033[0m")
         print()
         api_key = _input_prompt(
-            f"Enter your {provider_id.title()} API key:",
+            f"Enter your {str(provider_id).title()} API key:",
             default="",
             validate=lambda _, x: (True, "") if x == "" or len(x) >= 8 else (False, "Key must be at least 8 characters")
         )
         if api_key and len(api_key) >= 8:
             STATE["api_key"] = api_key
-            print(f"  \033[1;32m✓ {provider_id.title()} API key configured\033[0m")
+            print(f"  \033[1;32m✓ {str(provider_id).title()} API key configured\033[0m")
         else:
             print(f"  \033[1;33m⚠ No API key set — you can add it later in system/config.yaml\033[0m")
         STATE["auto_download"] = False
@@ -883,10 +896,26 @@ def phase_3_provider_model():
     models = _get_models_for_provider(provider_id, models_data, ram, vram)
 
     if not models:
-        print(f"  \033[1;33m⚠ No models found for {provider_id}\033[0m")
-        if not HAS_INQUIRER:
-            input("  Press Enter to continue...")
-        return
+        print(f"  \033[1;33m⚠ No models from API — using fallback list\033[0m")
+        if provider_id == "ollama":
+            models = [
+                ("qwen2.5-coder:0.5b", "Qwen Coder 0.5B", "~500 MB", "Tiny"),
+                ("qwen2.5-coder:1.5b", "Qwen Coder 1.5B", "~1.1 GB", "Small"),
+                ("qwen2.5-coder:3b", "Qwen Coder 3B", "~2.0 GB", "Medium"),
+                ("qwen2.5-coder:7b", "Qwen Coder 7B", "~4.5 GB", "Large"),
+                ("llama3.2:1b", "Llama 3.2 1B", "~670 MB", "Meta"),
+                ("llama3.2:3b", "Llama 3.2 3B", "~2.0 GB", "Meta"),
+            ]
+        elif provider_id == "lm-studio":
+            models = [("local", "Auto-detect loaded model", "~?", "LM Studio")]
+        elif provider_id == "vllm":
+            models = [
+                ("meta-llama/Llama-3.2-3B-Instruct", "Llama 3.2 3B", "~?", "HF"),
+                ("Qwen/Qwen2.5-Coder-7B-Instruct", "Qwen 2.5 Coder 7B", "~?", "HF"),
+            ]
+        else:
+            pid_str = provider_id[0] if isinstance(provider_id, (list, tuple)) else str(provider_id)
+            models = [(f"{pid_str}-model", f"{pid_str.title()} Model", "API", "Default")]
 
     model_choices = [(f"{name} ({size}) — {note}", mid) for mid, name, size, note in models]
 
