@@ -281,71 +281,28 @@ def _build_provider_list(models_data):
         })
 
     # Add API providers from models.dev
-    if models_data:
-        # Handle both dict and list formats
-        all_models = {}
-        if isinstance(models_data, dict):
-            all_models = models_data.get("models", models_data.get("data", {}))
-            # If it's a list, convert to dict
-            if isinstance(all_models, list):
-                all_models = {m.get("id", m.get("name", str(i))): m for i, m in enumerate(all_models)}
-        elif isinstance(models_data, list):
-            all_models = {m.get("id", m.get("name", str(i))): m for i, m in enumerate(models_data)}
-
-        seen_api = set()
-        for mid, mdef in all_models.items():
-            if not isinstance(mdef, dict):
+    if models_data and isinstance(models_data, dict):
+        for pid, pdef in models_data.items():
+            if not isinstance(pdef, dict):
                 continue
-            # Skip local-run models (already handled by local providers)
-            if mdef.get("local_run", False):
+            # Skip entries that don't look like providers
+            if "name" not in pdef and "models" not in pdef:
                 continue
-            if mdef.get("local") is False:
+            # Skip local providers (already added above)
+            if pid in LOCAL_PROVIDERS:
                 continue
-
-            # Extract provider from model metadata
-            vendor = mdef.get("vendor", "").lower()
-            family = mdef.get("family", "").lower()
-
-            # Map to known API provider IDs
-            api_id = None
-            if any(p in vendor for p in ("openai",)):
-                api_id = "openai"
-            elif any(p in vendor for p in ("anthropic",)):
-                api_id = "anthropic"
-            elif any(p in vendor for p in ("google",)):
-                api_id = "google"
-            elif any(p in vendor for p in ("mistral",)):
-                api_id = "mistral"
-            elif any(p in vendor for p in ("cohere",)):
-                api_id = "cohere"
-            elif any(p in vendor for p in ("groq",)):
-                api_id = "groq"
-            elif any(p in vendor for p in ("deepinfra",)):
-                api_id = "deepinfra"
-            elif any(p in vendor for p in ("together",)):
-                api_id = "together"
-            elif any(p in vendor for p in ("fireworks",)):
-                api_id = "fireworks"
-            elif any(p in vendor for p in ("perplexity",)):
-                api_id = "perplexity"
-            elif any(p in vendor for p in ("cerebras",)):
-                api_id = "cerebras"
-            elif any(p in vendor for p in ("novita",)):
-                api_id = "novita"
-            elif any(p in vendor for p in ("replicate",)):
-                api_id = "replicate"
-            elif any(p in vendor for p in ("openrouter",)):
-                api_id = "openrouter"
-
-            if api_id and api_id not in seen_api:
-                seen_api.add(api_id)
-                providers.append({
-                    "id": api_id,
-                    "name": api_id.title(),
-                    "desc": f"API provider — {mdef.get('name', api_id)}",
-                    "icon": "☁️",
-                    "type": "api",
-                })
+            name = pdef.get("name", pid)
+            models = pdef.get("models", {})
+            n_models = len(models) if isinstance(models, dict) else 0
+            if n_models == 0:
+                continue
+            providers.append({
+                "id": pid,
+                "name": name,
+                "desc": f"{n_models} models available",
+                "icon": "☁️",
+                "type": "api",
+            })
 
     # Add "Skip" option
     providers.append({
@@ -360,41 +317,23 @@ def _build_provider_list(models_data):
 
 def _get_models_for_provider(provider_id, models_data, ram_gb, vram_gb):
     """Get model recommendations for a specific provider."""
-    results = []
-
     if provider_id == "ollama":
-        results = _get_ollama_models(models_data, ram_gb, vram_gb)
+        return _get_ollama_models(models_data, ram_gb, vram_gb)
     elif provider_id == "lm-studio":
-        results = _get_lm_studio_models(models_data, ram_gb, vram_gb)
+        return _get_lm_studio_models(models_data, ram_gb, vram_gb)
     elif provider_id == "vllm":
-        results = _get_vllm_models(models_data, ram_gb, vram_gb)
+        return _get_vllm_models(models_data, ram_gb, vram_gb)
     elif provider_id == "llama-cpp":
-        results = _get_llama_cpp_models(models_data, ram_gb, vram_gb)
+        return _get_llama_cpp_models(models_data, ram_gb, vram_gb)
     elif provider_id == "mlc-llm":
-        results = _get_mlc_models(models_data, ram_gb, vram_gb)
+        return _get_mlc_models(models_data, ram_gb, vram_gb)
     elif provider_id in API_ONLY_PROVIDERS:
-        results = _get_api_models(provider_id, models_data)
+        return _get_api_models(provider_id, models_data)
     else:
-        # Generic: try to find models for this provider
-        if models_data:
-            results = _get_generic_models(provider_id, models_data)
-
-    return results
-
-def _normalize_models_data(models_data):
-    """Convert models.dev response to a consistent dict format."""
-    if not models_data:
-        return {}
-    if isinstance(models_data, dict):
-        all_models = models_data.get("models", models_data.get("data", {}))
-        if isinstance(all_models, list):
-            return {m.get("id", m.get("name", str(i))): m for i, m in enumerate(all_models)}
-        return all_models if isinstance(all_models, dict) else {}
-    if isinstance(models_data, list):
-        return {m.get("id", m.get("name", str(i))): m for i, m in enumerate(models_data)}
-    return {}
+        return _get_generic_models(provider_id, models_data)
 
 def _get_ollama_models(models_data, ram_gb, vram_gb):
+    """Get Ollama-compatible models (local fallback — not in models.dev API)."""
     results = []
     SIZE_MAP = {
         "0.5b": "~500 MB", "1b": "~670 MB", "1.5b": "~1.1 GB", "2b": "~1.5 GB",
@@ -418,57 +357,27 @@ def _get_ollama_models(models_data, ram_gb, vram_gb):
                 gb = float(size_str.replace("~","").replace("MB","").strip()) / 1024
             else:
                 return True
-            return gb <= ram_gb * 0.7  # Leave 30% for OS
+            return gb <= ram_gb * 0.7
         except ValueError:
             return True
 
-    if models_data:
-        all_models = _normalize_models_data(models_data)
-        for mid, mdef in all_models.items():
-            if not mdef.get("local_run", False):
-                continue
-            if mdef.get("local") is False:
-                continue
-            vendor = mdef.get("vendor", "").lower()
-            family = mdef.get("family", "").lower()
-            if not any(p in vendor for p in ("meta", "google", "microsoft", "qwen", "deepseek", "mistral", "gemma", "phi", "llama")):
-                continue
+    results = [
+        ("qwen2.5-coder:0.5b", "Qwen Coder 0.5B", "~500 MB", "Tiny — fits 2GB+"),
+        ("qwen2.5-coder:1.5b", "Qwen Coder 1.5B", "~1.1 GB", "Small — fits 4GB+"),
+        ("qwen2.5-coder:3b", "Qwen Coder 3B", "~2.0 GB", "Medium — fits 8GB+"),
+        ("qwen2.5-coder:7b", "Qwen Coder 7B", "~4.5 GB", "Large — fits 16GB+"),
+        ("qwen2.5-coder:14b", "Qwen Coder 14B", "~8.8 GB", "Huge — fits 32GB+"),
+        ("llama3.2:1b", "Llama 3.2 1B", "~670 MB", "Meta lightweight"),
+        ("llama3.2:3b", "Llama 3.2 3B", "~2.0 GB", "Meta general"),
+        ("gemma3:1b", "Gemma 3 1B", "~790 MB", "Google tiny"),
+        ("gemma3:4b", "Gemma 3 4B", "~2.6 GB", "Google balanced"),
+        ("phi4-mini:3b", "Phi-4 Mini 3B", "~2.1 GB", "Microsoft capable"),
+    ]
 
-            model_id = mid
-            name = mdef.get("name", mid)
-            size = est_size(mid)
-            if not fits_ram(size):
-                continue
+    # Filter by RAM
+    results = [(mid, name, size, note) for mid, name, size, note in results if fits_ram(size)]
 
-            note = "Local model"
-            if "qwen" in family or "qwen" in mid.lower():
-                note = "Strong code & multilingual"
-            elif "llama" in family:
-                note = "Meta general purpose"
-            elif "gemma" in family:
-                note = "Google lightweight"
-            elif "phi" in family:
-                note = "Microsoft tiny"
-            elif "mistral" in family:
-                note = "French open-weight"
-            elif "deepseek" in family:
-                note = "Code focused"
-
-            results.append((model_id, name, size, note))
-    else:
-        # Local fallback
-        results = [
-            ("qwen2.5-coder:0.5b", "Qwen Coder 0.5B", "~500 MB", "Tiny — fits 2GB+"),
-            ("qwen2.5-coder:1.5b", "Qwen Coder 1.5B", "~1.1 GB", "Small — fits 4GB+"),
-            ("qwen2.5-coder:3b", "Qwen Coder 3B", "~2.0 GB", "Medium — fits 8GB+"),
-            ("qwen2.5-coder:7b", "Qwen Coder 7B", "~4.5 GB", "Large — fits 16GB+"),
-            ("qwen2.5-coder:14b", "Qwen Coder 14B", "~8.8 GB", "Huge — fits 32GB+"),
-            ("llama3.2:1b", "Llama 3.2 1B", "~670 MB", "Meta lightweight"),
-            ("llama3.2:3b", "Llama 3.2 3B", "~2.0 GB", "Meta general"),
-            ("gemma3:1b", "Gemma 3 1B", "~790 MB", "Google tiny"),
-            ("gemma3:4b", "Gemma 3 4B", "~2.6 GB", "Google balanced"),
-            ("phi4-mini:3b", "Phi-4 Mini 3B", "~2.1 GB", "Microsoft capable"),
-        ]
+    return results
 
     # Sort by size
     def sort_key(item):
@@ -487,40 +396,15 @@ def _get_ollama_models(models_data, ram_gb, vram_gb):
 def _get_lm_studio_models(models_data, ram_gb, vram_gb):
     """Get LM Studio compatible models (GGUF format)."""
     results = []
-    if models_data:
-        all_models = _normalize_models_data(models_data)
-        for mid, mdef in all_models.items():
-            if not mdef.get("local_run", False):
-                continue
-            vendor = mdef.get("vendor", "").lower()
-            family = mdef.get("family", "").lower()
-            if any(p in vendor for p in ("meta", "google", "microsoft", "qwen", "deepseek", "mistral", "gemma", "phi", "llama")):
-                results.append((mid, mdef.get("name", mid), "~?", f"{family.title()} — GGUF compatible"))
-    else:
-        results = [
-            ("local", "Auto-detect loaded model", "~?", "LM Studio will auto-detect"),
-        ]
-    return results
+def _get_lm_studio_models(models_data, ram_gb, vram_gb):
+    return [("local", "Auto-detect loaded model", "~?", "LM Studio will auto-detect")]
 
 def _get_vllm_models(models_data, ram_gb, vram_gb):
-    """Get vLLM compatible models (HuggingFace format)."""
-    results = []
-    if models_data:
-        all_models = _normalize_models_data(models_data)
-        for mid, mdef in all_models.items():
-            if not mdef.get("local_run", False):
-                continue
-            vendor = mdef.get("vendor", "").lower()
-            family = mdef.get("family", "").lower()
-            if any(p in vendor for p in ("meta", "google", "microsoft", "qwen", "deepseek", "mistral", "gemma", "phi", "llama")):
-                results.append((mid, mdef.get("name", mid), "~?", f"{family.title()} — HF compatible"))
-    else:
-        results = [
-            ("meta-llama/Llama-3.2-3B-Instruct", "Llama 3.2 3B", "~?", "Meta — HF format"),
-            ("Qwen/Qwen2.5-Coder-7B-Instruct", "Qwen 2.5 Coder 7B", "~?", "Qwen — HF format"),
-            ("google/gemma-2-9b", "Gemma 2 9B", "~?", "Google — HF format"),
-        ]
-    return results
+    return [
+        ("meta-llama/Llama-3.2-3B-Instruct", "Llama 3.2 3B", "~?", "Meta — HF format"),
+        ("Qwen/Qwen2.5-Coder-7B-Instruct", "Qwen 2.5 Coder 7B", "~?", "Qwen — HF format"),
+        ("google/gemma-2-9b", "Gemma 2 9B", "~?", "Google — HF format"),
+    ]
 
 def _get_llama_cpp_models(models_data, ram_gb, vram_gb):
     results = [
@@ -535,56 +419,38 @@ def _get_mlc_models(models_data, ram_gb, vram_gb):
     return results
 
 def _get_api_models(provider_id, models_data):
-    """Get models for an API provider."""
+    """Get models for an API provider from models.dev data."""
     results = []
-    if models_data:
-        all_models = _normalize_models_data(models_data)
-        for mid, mdef in all_models.items():
-            vendor = mdef.get("vendor", "").lower()
-            family = mdef.get("family", "").lower()
-            # Match provider
-            provider_match = False
-            if provider_id == "openai" and "openai" in vendor:
-                provider_match = True
-            elif provider_id == "anthropic" and "anthropic" in vendor:
-                provider_match = True
-            elif provider_id == "google" and "google" in vendor:
-                provider_match = True
-            elif provider_id == "mistral" and "mistral" in vendor:
-                provider_match = True
-            elif provider_id == "cohere" and "cohere" in vendor:
-                provider_match = True
-            elif provider_id == "groq" and "groq" in vendor:
-                provider_match = True
-            elif provider_id == "deepinfra" and "deepinfra" in vendor:
-                provider_match = True
-            elif provider_id == "together" and "together" in vendor:
-                provider_match = True
-            elif provider_id == "fireworks" and "fireworks" in vendor:
-                provider_match = True
-            elif provider_id == "perplexity" and "perplexity" in vendor:
-                provider_match = True
-            elif provider_id == "cerebras" and "cerebras" in vendor:
-                provider_match = True
-            elif provider_id == "novita" and "novita" in vendor:
-                provider_match = True
-            elif provider_id == "replicate" and "replicate" in vendor:
-                provider_match = True
+    if models_data and isinstance(models_data, dict) and provider_id in models_data:
+        pdef = models_data[provider_id]
+        if isinstance(pdef, dict):
+            models = pdef.get("models", {})
+            if isinstance(models, dict):
+                for mid, mdef in models.items():
+                    if not isinstance(mdef, dict):
+                        continue
+                    name = mdef.get("name", mid)
+                    family = mdef.get("family", "")
+                    reasoning = mdef.get("reasoning", False)
+                    tool_call = mdef.get("tool_call", False)
+                    note = family.title() if family else "API model"
+                    if reasoning:
+                        note += " + reasoning"
+                    if tool_call:
+                        note += " + tools"
+                    results.append((mid, name, "API", note))
 
-            if provider_match:
-                context = mdef.get("limit", {}).get("context", 0)
-                results.append((mid, mdef.get("name", mid), "API", f"Context: {context}" if context else "API model"))
-
-    # Fallback defaults
+    # Fallback defaults if API returned nothing
     if not results:
         defaults = {
             "openai": [("gpt-4o-mini", "GPT-4o Mini", "API", "Cheapest"), ("gpt-4o", "GPT-4o", "API", "Full"), ("gpt-3.5-turbo", "GPT-3.5 Turbo", "API", "Legacy")],
-            "anthropic": [("claude-3-haiku-20240307", "Claude 3 Haiku", "API", "Fast"), ("claude-3-sonnet-20240229", "Claude 3 Sonnet", "API", "Balanced"), ("claude-3-opus-20240229", "Claude 3 Opus", "API", "Powerful")],
-            "google": [("gemini-1.5-flash", "Gemini 1.5 Flash", "API", "Fast"), ("gemini-1.5-pro", "Gemini 1.5 Pro", "API", "Powerful")],
-            "mistral": [("mistral-small", "Mistral Small", "API", "Fast"), ("mistral-large", "Mistral Large", "API", "Powerful")],
+            "anthropic": [("claude-sonnet-4-20250514", "Claude Sonnet 4", "API", "Balanced"), ("claude-opus-4-1-20250805", "Claude Opus 4.1", "API", "Powerful"), ("claude-haiku-4-5", "Claude Haiku 4.5", "API", "Fast")],
+            "google": [("gemini-flash-latest", "Gemini Flash Latest", "API", "Fast"), ("gemini-pro-latest", "Gemini Pro Latest", "API", "Powerful")],
+            "mistral": [("mistral-large-latest", "Mistral Large Latest", "API", "Powerful"), ("mistral-medium-latest", "Mistral Medium Latest", "API", "Balanced")],
             "groq": [("llama-3.1-8b-instant", "Llama 3.1 8B", "API", "Fast"), ("llama-3.1-70b-versatile", "Llama 3.1 70B", "API", "Powerful")],
         }
-        results = defaults.get(provider_id, [(f"{provider_id}-model", f"{provider_id.title()} Model", "API", "Default")])
+        pid_str = str(provider_id)
+        results = defaults.get(pid_str, [(f"{pid_str}-model", f"{pid_str.title()} Model", "API", "Default")])
 
     return results
 
