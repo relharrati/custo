@@ -52,12 +52,18 @@ VLLM_PORT = 8000
 CUSTO_PORT_DEFAULT = 18789
 MODELS_DEV_URL = "https://models.dev/api.json"
 
-# Hardcoded API/OAuth providers that never need local model download
-API_ONLY_PROVIDERS = {
-    "openai", "anthropic", "google", "gemini", "groq", "together",
+# Known providers that use OAuth/service accounts instead of simple API keys
+OAUTH_PROVIDERS = {"google", "azure", "aws", "ibm", "oracle"}
+
+# Known API providers that need an API key
+API_KEY_PROVIDERS = {
+    "openai", "anthropic", "groq", "together",
     "deepinfra", "fireworks", "perplexity", "cohere", "mistral",
-    "cerebras", "novita", "openrouter", "replicate",
+    "cerebras", "novita", "openrouter", "replicate", "google",
 }
+
+# Providers that support cloud-hosted inference
+CLOUD_PROVIDERS = {"ollama": "Ollama Cloud", "openai": "OpenAI", "anthropic": "Anthropic"}
 
 # Known local-run providers that support auto-download
 LOCAL_PROVIDERS = {
@@ -327,7 +333,7 @@ def _get_models_for_provider(provider_id, models_data, ram_gb, vram_gb):
         return _get_llama_cpp_models(models_data, ram_gb, vram_gb)
     elif provider_id == "mlc-llm":
         return _get_mlc_models(models_data, ram_gb, vram_gb)
-    elif provider_id in API_ONLY_PROVIDERS:
+    elif provider_id in API_KEY_PROVIDERS:
         return _get_api_models(provider_id, models_data)
     else:
         return _get_generic_models(provider_id, models_data)
@@ -577,13 +583,17 @@ def _select_prompt(message, choices, default=None):
                 pass
             print(f"  Invalid. Enter 1-{len(choices)}.")
 
-def _input_prompt(message, default=None, validate=None):
+def _input_prompt(message, default=None, validate_fn=None):
+    """Text input with optional validation.
+    validate_fn: callable(text) -> (ok: bool, error: str)
+    """
     if HAS_INQUIRER:
         kwargs = {"message": message, "style": custom_style()}
         if default is not None:
             kwargs["default"] = default
-        if validate:
-            kwargs["validate"] = validate
+        if validate_fn:
+            # InquirerPy validate expects callable(text) -> bool
+            kwargs["validate"] = lambda text: validate_fn(text)[0]
         return inquirer.text(**kwargs).execute()
     else:
         prompt_text = f"  {message}"
@@ -594,8 +604,8 @@ def _input_prompt(message, default=None, validate=None):
             val = input(prompt_text).strip()
             if not val and default is not None:
                 return default
-            if validate:
-                ok, err = validate(val)
+            if validate_fn:
+                ok, err = validate_fn(val)
                 if not ok:
                     print(f"  {err}")
                     continue
@@ -690,7 +700,7 @@ def phase_3_provider_model():
     Phase 3: Pick provider → API key (if needed) → pick model → confirm.
     Flow:
       1. List all providers (from models.dev + known locals) → select one
-      2. If API provider → enter API key
+      2. If API provider → enter API key (skip OAuth providers)
       3. Show models for that provider → select one
       4. Auto-download prompt (local only)
       5. Continue to next phase
@@ -730,21 +740,99 @@ def phase_3_provider_model():
         STATE["model_display"] = "Hardcoded responses"
         STATE["model_size"] = "N/A"
         STATE["auto_download"] = False
+        STATE["deploy_mode"] = None
         print("  \033[90mSkipping LLM — hardcoded responses will be used.\033[0m")
         if not HAS_INQUIRER:
             input("  Press Enter to continue...")
         return
 
+    # ── Step 1.5: Ollama deploy mode (local vs cloud) ───────
+    if provider_id == "ollama":
+        print()
+        deploy_choices = [
+            ("💻  Local — run Ollama on this machine", "local"),
+            ("☁️  Cloud Ollama — connect to remote Ollama instance", "cloud"),
+        ]
+        deploy_mode = _select_prompt("Ollama deployment mode:", deploy_choices, default="local")
+        STATE["deploy_mode"] = deploy_mode
+
+        if deploy_mode == "cloud":
+            print()
+            print("  \033[1;97mConfigure Cloud Ollama Connection\033[0m")
+            print("  \033[90mEnter the URL of your remote Ollama instance\033[0m")
+            print()
+            ollama_url = _input_prompt(
+                "Ollama URL (e.g. https://ollama.example.com):",
+                default="http://127.0.0.1:11434",
+                validate_fn=lambda t: (True, "")  # accept any input
+            )
+            STATE["ollama_url"] = ollama_url
+            STATE["auto_download"] = False
+            print(f"  \033[1;32m✓ Cloud Ollama URL: {ollama_url}\033[0m")
+
     # ── Step 2: API Key (for API providers) ─────────────────
-    if provider_id in API_ONLY_PROVIDERS:
+    if provider_id in OAUTH_PROVIDERS:
+        print()
+        print(f"  \033[1;97mConfigure {str(provider_id).title()} Authentication\033[0m")
+        print(f"  \033[90mThis provider uses OAuth — you'll need to set up credentials manually.\033[0m")
+        print(f"  \033[90mSee: https://{str(provider_id).lower()}.com/docs/auth\033[0m")
+        print()
+        print("  \033[1;33m⚠ OAuth setup must be done manually in system/config.yaml\033[0m")
+        STATE["api_key"] = None
+        STATE["auto_download"] = False
+    elif provider_id in API_KEY_PROVIDERS:
+        print()
+        key_label = "API Key"
+        key_url = f"https://{str(provider_id).lower()}.com/settings/api"
+        if provider_id == "google":
+            key_label = "API Key / OAuth Token"
+            key_url = "https://aistudio.google.com/apikey"
+        elif provider_id == "openrouter":
+            key_url = "https://openrouter.ai/settings/keys"
+        elif provider_id == "groq":
+            key_url = "https://console.groq.com/keys"
+        elif provider_id == "mistral":
+            key_url = "https://console.mistral.ai/api-keys/"
+        elif provider_id == "cohere":
+            key_url = "https://dashboard.cohere.com/api-keys"
+        elif provider_id == "deepinfra":
+            key_url = "https://deepinfra.com/dash"
+        elif provider_id == "fireworks":
+            key_url = "https://fireworks.ai/account/api-keys"
+        elif provider_id == "together":
+            key_url = "https://api.together.ai/settings/api-keys"
+        elif provider_id == "perplexity":
+            key_url = "https://www.perplexity.ai/settings/api"
+        elif provider_id == "cerebras":
+            key_url = "https://cloud.cerebras.ai/"
+        elif provider_id == "novita":
+            key_url = "https://novita.ai/settings"
+        elif provider_id == "replicate":
+            key_url = "https://replicate.com/account/api-tokens"
+
+        print(f"  \033[1;97mConfigure {str(provider_id).title()} {key_label}\033[0m")
+        print(f"  \033[90mGet your key from {key_url}\033[0m")
+        print()
+        api_key = _input_prompt(
+            f"Enter your {str(provider_id).title()} {key_label}:",
+            default="",
+            validate_fn=lambda x: (True, "") if x == "" or len(x) >= 8 else (False, "Key must be at least 8 characters")
+        )
+        if api_key and len(api_key) >= 8:
+            STATE["api_key"] = api_key
+            print(f"  \033[1;32m✓ {str(provider_id).title()} {key_label} configured\033[0m")
+        else:
+            print(f"  \033[1;33m⚠ No key set — you can add it later in system/config.yaml\033[0m")
+        STATE["auto_download"] = False
+    elif provider_id not in LOCAL_PROVIDERS:
+        # Unknown API provider — still ask for key
         print()
         print(f"  \033[1;97mConfigure {str(provider_id).title()} API Key\033[0m")
-        print(f"  \033[90mGet your key from https://{str(provider_id).lower()}.com/settings/api\033[0m")
         print()
         api_key = _input_prompt(
             f"Enter your {str(provider_id).title()} API key:",
             default="",
-            validate=lambda _, x: (True, "") if x == "" or len(x) >= 8 else (False, "Key must be at least 8 characters")
+            validate_fn=lambda x: (True, "") if x == "" or len(x) >= 8 else (False, "Key must be at least 8 characters")
         )
         if api_key and len(api_key) >= 8:
             STATE["api_key"] = api_key
@@ -756,66 +844,76 @@ def phase_3_provider_model():
         STATE["auto_download"] = True
 
     # ── Step 3: Select Model ────────────────────────────────
-    print()
-    ram = STATE["ram_gb"]
-    vram = STATE["vram_gb"]
-    models = _get_models_for_provider(provider_id, models_data, ram, vram)
-
-    if not models:
-        print(f"  \033[1;33m⚠ No models from API — using fallback list\033[0m")
-        if provider_id == "ollama":
-            models = [
-                ("qwen2.5-coder:0.5b", "Qwen Coder 0.5B", "~500 MB", "Tiny"),
-                ("qwen2.5-coder:1.5b", "Qwen Coder 1.5B", "~1.1 GB", "Small"),
-                ("qwen2.5-coder:3b", "Qwen Coder 3B", "~2.0 GB", "Medium"),
-                ("qwen2.5-coder:7b", "Qwen Coder 7B", "~4.5 GB", "Large"),
-                ("llama3.2:1b", "Llama 3.2 1B", "~670 MB", "Meta"),
-                ("llama3.2:3b", "Llama 3.2 3B", "~2.0 GB", "Meta"),
-            ]
-        elif provider_id == "lm-studio":
-            models = [("local", "Auto-detect loaded model", "~?", "LM Studio")]
-        elif provider_id == "vllm":
-            models = [
-                ("meta-llama/Llama-3.2-3B-Instruct", "Llama 3.2 3B", "~?", "HF"),
-                ("Qwen/Qwen2.5-Coder-7B-Instruct", "Qwen 2.5 Coder 7B", "~?", "HF"),
-            ]
-        else:
-            pid_str = provider_id[0] if isinstance(provider_id, (list, tuple)) else str(provider_id)
-            models = [(f"{pid_str}-model", f"{pid_str.title()} Model", "API", "Default")]
-
-    model_choices = [(f"{name} ({size}) — {note}", mid) for mid, name, size, note in models]
-
-    # Show RAM/VRAM hint for local providers
-    is_local = provider_id in LOCAL_PROVIDERS
-    if is_local:
-        effective = vram if vram > 0 else ram
-        if effective < 4:
-            print(f"  \033[1;33m⚠ Only {effective}GB memory — smaller models recommended\033[0m")
-        elif effective < 8:
-            print(f"  \033[1;90m{effective}GB memory — models up to ~3B will run well\033[0m")
+    # Skip model selection for cloud Ollama (user picks on remote)
+    if STATE.get("deploy_mode") == "cloud":
         print()
-
-    model_id = _select_prompt("Pick a model:", model_choices, default=models[0][0])
-    STATE["model"] = model_id
-
-    # Store display info
-    for mid, name, size, note in models:
-        if mid == model_id:
-            STATE["model_display"] = name
-            STATE["model_size"] = size
-            break
-
-    print(f"\n  \033[1;32m✓ Model: {STATE['model_display']} ({STATE['model_size']})\033[0m")
-
-    # ── Step 4: Auto-download (local providers only) ────────
-    if is_local:
+        print("  \033[90mCloud Ollama — models are managed on the remote instance.\033[0m")
+        print("  \033[90mMake sure your desired model is pulled on the remote.\033[0m")
+        STATE["model"] = "cloud-remote"
+        STATE["model_display"] = "Remote Ollama Model"
+        STATE["model_size"] = "Remote"
+        print(f"\n  \033[1;32m✓ Model: {STATE['model_display']}\033[0m")
+    else:
         print()
-        auto_dl = _confirm_prompt("Auto-download model during setup?", default=True)
-        STATE["auto_download"] = auto_dl
-        if auto_dl:
-            print("  \033[90mModel will be downloaded in Phase 6.\033[0m")
-        else:
-            print("  \033[90mYou can download it later with the provider's CLI.\033[0m")
+        ram = STATE["ram_gb"]
+        vram = STATE["vram_gb"]
+        models = _get_models_for_provider(provider_id, models_data, ram, vram)
+
+        if not models:
+            print(f"  \033[1;33m⚠ No models from API — using fallback list\033[0m")
+            if provider_id == "ollama":
+                models = [
+                    ("qwen2.5-coder:0.5b", "Qwen Coder 0.5B", "~500 MB", "Tiny"),
+                    ("qwen2.5-coder:1.5b", "Qwen Coder 1.5B", "~1.1 GB", "Small"),
+                    ("qwen2.5-coder:3b", "Qwen Coder 3B", "~2.0 GB", "Medium"),
+                    ("qwen2.5-coder:7b", "Qwen Coder 7B", "~4.5 GB", "Large"),
+                    ("llama3.2:1b", "Llama 3.2 1B", "~670 MB", "Meta"),
+                    ("llama3.2:3b", "Llama 3.2 3B", "~2.0 GB", "Meta"),
+                ]
+            elif provider_id == "lm-studio":
+                models = [("local", "Auto-detect loaded model", "~?", "LM Studio")]
+            elif provider_id == "vllm":
+                models = [
+                    ("meta-llama/Llama-3.2-3B-Instruct", "Llama 3.2 3B", "~?", "HF"),
+                    ("Qwen/Qwen2.5-Coder-7B-Instruct", "Qwen 2.5 Coder 7B", "~?", "HF"),
+                ]
+            else:
+                pid_str = provider_id[0] if isinstance(provider_id, (list, tuple)) else str(provider_id)
+                models = [(f"{pid_str}-model", f"{pid_str.title()} Model", "API", "Default")]
+
+        model_choices = [(f"{name} ({size}) — {note}", mid) for mid, name, size, note in models]
+
+        # Show RAM/VRAM hint for local providers
+        is_local = provider_id in LOCAL_PROVIDERS
+        if is_local:
+            effective = vram if vram > 0 else ram
+            if effective < 4:
+                print(f"  \033[1;33m⚠ Only {effective}GB memory — smaller models recommended\033[0m")
+            elif effective < 8:
+                print(f"  \033[1;90m{effective}GB memory — models up to ~3B will run well\033[0m")
+            print()
+
+        model_id = _select_prompt("Pick a model:", model_choices, default=models[0][0])
+        STATE["model"] = model_id
+
+        # Store display info
+        for mid, name, size, note in models:
+            if mid == model_id:
+                STATE["model_display"] = name
+                STATE["model_size"] = size
+                break
+
+        print(f"\n  \033[1;32m✓ Model: {STATE['model_display']} ({STATE['model_size']})\033[0m")
+
+        # ── Step 4: Auto-download (local providers only) ────────
+        if is_local:
+            print()
+            auto_dl = _confirm_prompt("Auto-download model during setup?", default=True)
+            STATE["auto_download"] = auto_dl
+            if auto_dl:
+                print("  \033[90mModel will be downloaded in Phase 6.\033[0m")
+            else:
+                print("  \033[90mYou can download it later with the provider's CLI.\033[0m")
 
     print()
     if not HAS_INQUIRER:
@@ -890,8 +988,8 @@ def phase_6_install_and_verify():
     provider = STATE["provider"]
     model = STATE["model"]
 
-    # Skip for API providers and skip
-    if provider in API_ONLY_PROVIDERS or provider == "skip":
+    # Skip for API providers, OAuth providers, cloud Ollama, and skip
+    if provider in API_KEY_PROVIDERS or provider in OAUTH_PROVIDERS or provider == "skip" or STATE.get("deploy_mode") == "cloud":
         if provider == "skip":
             print("  \033[90mNo LLM configured — hardcoded responses active.\033[0m")
         else:
