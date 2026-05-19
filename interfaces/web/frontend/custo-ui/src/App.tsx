@@ -49,6 +49,7 @@ export default function App() {
   const [configOpen, setConfigOpen] = useState(false)
   const [addProviderOpen, setAddProviderOpen] = useState(false)
   const viewportRef = useRef<HTMLDivElement>(null)
+  const wsRef = useRef<WebSocket | null>(null)
 
   useEffect(() => { check(); const i = setInterval(check, 10000); return () => clearInterval(i) }, [])
   useEffect(() => { fetchModels() }, [])
@@ -63,6 +64,74 @@ export default function App() {
     if (view === "memory") loadMemory()
   }, [view])
 
+  // WebSocket connection
+  useEffect(() => {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+    const wsUrl = `${protocol}//${window.location.host}/ws/chat`
+    const ws = new WebSocket(wsUrl)
+    wsRef.current = ws
+
+    ws.onclose = () => {
+      setConnected(false)
+      // Reconnect after 3 seconds
+      setTimeout(() => {
+        if (wsRef.current?.readyState !== WebSocket.OPEN) {
+          // Trigger re-render to recreate connection
+          setConnected(false)
+        }
+      }, 3000)
+    }
+
+    ws.onopen = () => setConnected(true)
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data)
+        if (msg.type === "state") {
+          setMessages(p => {
+            const last = p[p.length - 1]
+            if (last?.role === "custo" && last.streaming) {
+              return [...p.slice(0, -1), { ...last, state: msg.state as StreamState }]
+            }
+            return p
+          })
+        } else if (msg.type === "chunk") {
+          setMessages(p => {
+            const last = p[p.length - 1]
+            if (last?.role === "custo" && last.streaming) {
+              return [...p.slice(0, -1), { ...last, content: (last.content || "") + msg.text }]
+            }
+            return p
+          })
+        } else if (msg.type === "done") {
+          setMessages(p => {
+            const last = p[p.length - 1]
+            if (last?.role === "custo" && last.streaming) {
+              if (msg.session_id && !sessionId) setSessionId(msg.session_id)
+              return [...p.slice(0, -1), { ...last, streaming: false, state: "done" as StreamState }]
+            }
+            return p
+          })
+          setSending(false)
+        } else if (msg.type === "error") {
+          setMessages(p => {
+            const last = p[p.length - 1]
+            if (last?.role === "custo" && last.streaming) {
+              return [...p.slice(0, -1), { ...last, content: `Error: ${msg.text}`, streaming: false, state: "done" as StreamState }]
+            }
+            return p
+          })
+          setSending(false)
+        }
+      } catch {}
+    }
+
+    return () => {
+      ws.close()
+      wsRef.current = null
+    }
+  }, [])
+
   async function check() {
     try { const r = await fetch(`${API}/api/health`); if (r.ok) { setConnected(true); setHealth(await r.json()) } else setConnected(false) }
     catch { setConnected(false) }
@@ -71,6 +140,17 @@ export default function App() {
   async function loadSessions() { try { const r = await fetch(`${API}/api/sessions`); if (r.ok) { const d = await r.json(); setSessions(d.sessions || []) } } catch {} }
   async function loadAgents() { try { const r = await fetch(`${API}/api/agents`); if (r.ok) setAgents(await r.json()) } catch {} }
   async function loadMemory() { try { const r = await fetch(`${API}/api/memory`); if (r.ok) setMemory(await r.json()) } catch {} }
+
+  async function saveProviderConfig(configs: ProviderConfig[]) {
+    setProviderConfig(configs)
+    try {
+      await fetch(`${API}/api/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider_config: configs }),
+      })
+    } catch {}
+  }
 
   async function fetchModels() {
     try {
@@ -98,7 +178,7 @@ export default function App() {
               provider: providerName,
               version: m.context_length ? `${Math.round(m.context_length / 1024)}K ctx` : undefined,
             })
-            providerModelsList.push({ id: modelId, name: m.name || modelId, enabled: true })
+            providerModelsList.push({ id: modelId, name: m.name || modelId, enabled: false })
           }
         }
 
@@ -108,6 +188,17 @@ export default function App() {
       setAvailableModels(models)
       setProviderConfig(configs)
       setModelsLoading(false)
+
+      // Load saved config from backend
+      try {
+        const cfgRes = await fetch(`${API}/api/config`)
+        if (cfgRes.ok) {
+          const cfg = await cfgRes.json()
+          if (cfg.providers && Array.isArray(cfg.providers)) {
+            setProviderConfig(cfg.providers)
+          }
+        }
+      } catch {}
     } catch {
       setModelsLoading(false)
     }
@@ -118,29 +209,34 @@ export default function App() {
     setMessages(p => [...p, { role: "user", content: t, time: ts() }])
     setInput(""); setSending(true)
 
+    // Add streaming assistant message
     const assistantIdx = messages.length + 1
     const baseSpeed = 50 + Math.random() * 20
     setMessages(p => [...p, { role: "custo", content: "", time: ts(), streaming: true, state: "waiting", speed: baseSpeed }])
 
-    try {
-      const payload: any = { message: t }; if (sessionId) payload.session_id = sessionId
-      const r = await fetch(`${API}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      const d = await r.json(); if (d.session_id && !sessionId) setSessionId(d.session_id)
-
-      setMessages(p => p.map((m, i) => i === assistantIdx ? { ...m, state: "streaming" as StreamState } : m))
-
-      const response = d.response || "No response."
-      for (let i = 0; i < response.length; i++) {
-        await new Promise(r => setTimeout(r, 10))
-        setMessages(p => p.map((m, i2) => i2 === assistantIdx ? { ...m, content: response.slice(0, i + 1) } : m))
+    // Send via WebSocket
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        message: t,
+        session_id: sessionId,
+        model_id: selectedModel,
+        agent_id: selectedAgent,
+      }))
+    } else {
+      // Fallback to HTTP if WebSocket not connected
+      try {
+        const payload: any = { message: t, model_id: selectedModel, agent_id: selectedAgent }
+        if (sessionId) payload.session_id = sessionId
+        const r = await fetch(`${API}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const d = await r.json(); if (d.session_id && !sessionId) setSessionId(d.session_id)
+        setMessages(p => p.map((m, i) => i === assistantIdx ? { ...m, content: d.response || "No response.", streaming: false, state: "done" as StreamState } : m))
+        setSending(false)
+      } catch (e: any) {
+        setMessages(p => p.map((m, i) => i === assistantIdx ? { ...m, content: `Error: ${e.message}`, streaming: false, state: "done" as StreamState } : m))
+        setSending(false)
       }
-    } catch (e: any) {
-      setMessages(p => p.map((m, i) => i === assistantIdx ? { ...m, content: `Error: ${e.message}`, streaming: false, state: "done" as StreamState } : m))
     }
-
-    setMessages(p => p.map((m, i) => i === assistantIdx ? { ...m, streaming: false, state: "done" as StreamState } : m))
-    setSending(false)
   }
 
   function ts() { return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }
@@ -175,10 +271,10 @@ export default function App() {
 
   const activeModels = availableModels.filter((m) => {
     if (m.id === "auto") return true
-    const provider = providerConfig.find((p) => p.name === m.provider || p.id === m.provider.toLowerCase())
+    const provider = providerConfig.find((p) => p.name === m.provider)
     if (!provider || !provider.enabled) return false
     const model = provider.models.find((mod) => mod.id === m.id)
-    return model ? model.enabled : true
+    return model ? model.enabled : false
   })
 
   const agentOptions = [
@@ -417,7 +513,7 @@ export default function App() {
         providers={providerConfig}
         open={configOpen}
         onOpenChange={setConfigOpen}
-        onChange={setProviderConfig}
+        onChange={saveProviderConfig}
       />
     </SidebarProvider>
   )

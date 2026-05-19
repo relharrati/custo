@@ -63,11 +63,18 @@ except Exception as e:
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
+    model_id: Optional[str] = None
+    agent_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
     response: str
     session_id: str
+
+
+class ConfigUpdate(BaseModel):
+    provider_config: Optional[list] = None
+    llm: Optional[dict] = None
 
 
 # ── App Lifecycle ────────────────────────────────────────────
@@ -123,21 +130,6 @@ async def serve_frontend():
     if old_index.exists():
         return HTMLResponse(content=old_index.read_text(encoding="utf-8"))
     return HTMLResponse(content="<h1>Frontend not found</h1>", status_code=404)
-
-
-# Serve any other static files from dist (favicons, etc.)
-if CUSTO_UI_DIST.exists():
-    @app.get("/{path:path}")
-    async def serve_static(path: str):
-        """Serve static files from the React build."""
-        file_path = CUSTO_UI_DIST / path
-        if file_path.is_file():
-            return FileResponse(str(file_path))
-        # SPA fallback - serve index.html for client-side routing
-        index = CUSTO_UI_DIST / "index.html"
-        if index.exists():
-            return HTMLResponse(content=index.read_text(encoding="utf-8"))
-        raise HTTPException(status_code=404, detail="Not found")
 
 
 # ── Health & System Info ─────────────────────────────────────
@@ -223,7 +215,7 @@ async def chat(request: ChatRequest):
         session_id = str(uuid.uuid4())[:8]
 
     # Try to get response from daemon/agent
-    response = await _process_message(request.message, session_id)
+    response = await _process_message(request.message, session_id, request.model_id, request.agent_id)
 
     # Save to session
     if session_mgr:
@@ -236,7 +228,7 @@ async def chat(request: ChatRequest):
     return ChatResponse(response=response, session_id=session_id)
 
 
-async def _process_message(message: str, session_id: str) -> str:
+async def _process_message(message: str, session_id: str, model_id: Optional[str] = None, agent_id: Optional[str] = None) -> str:
     """Route message to the best available backend."""
 
     # 1. Try daemon via HTTP gateway
@@ -249,7 +241,12 @@ async def _process_message(message: str, session_id: str) -> str:
         import urllib.error
 
         url = f"http://{gateway_host}:{gateway_port}/api/chat"
-        payload = json.dumps({"message": message, "session_id": session_id}).encode()
+        payload = json.dumps({
+            "message": message,
+            "session_id": session_id,
+            "model_id": model_id,
+            "agent_id": agent_id or "main",
+        }).encode()
         req = urllib.request.Request(
             url,
             data=payload,
@@ -265,10 +262,12 @@ async def _process_message(message: str, session_id: str) -> str:
     # 2. Try agent registry directly (send message to main agent subprocess)
     if agent_registry:
         try:
-            future = agent_registry.send_message("main", {
+            target_agent = agent_id or "main"
+            future = agent_registry.send_message(target_agent, {
                 "type": "user_message",
                 "content": message,
                 "session_id": session_id,
+                "model_id": model_id,
             })
             if future:
                 result = await future
@@ -413,6 +412,8 @@ async def websocket_chat(websocket: WebSocket):
     await websocket.accept()
 
     session_id = str(uuid.uuid4())[:8]
+    current_model = None
+    current_agent = "main"
 
     try:
         while True:
@@ -420,32 +421,31 @@ async def websocket_chat(websocket: WebSocket):
 
             try:
                 payload = json.loads(data)
-                message = payload.get("message", data)
+                message = payload.get("message", "")
                 sid = payload.get("session_id", session_id)
+                current_model = payload.get("model_id", current_model)
+                current_agent = payload.get("agent_id", current_agent)
             except json.JSONDecodeError:
                 message = data
                 sid = session_id
 
-            # Send typing indicator
-            await websocket.send_json({"type": "typing"})
+            if not message.strip():
+                await websocket.send_json({"type": "error", "text": "Empty message"})
+                continue
+
+            # Send state indicator
+            await websocket.send_json({"type": "state", "state": "waiting"})
 
             # Process message
-            response = await _process_message(message, sid)
+            response = await _process_message(message, sid, current_model, current_agent)
 
             # Stream response in chunks
-            chunks = _split_response(response)
-            for chunk in chunks:
-                await websocket.send_json({
-                    "type": "chunk",
-                    "text": chunk,
-                    "session_id": sid,
-                })
-                await asyncio.sleep(0.02)
+            await websocket.send_json({"type": "state", "state": "streaming"})
+            for char in response:
+                await websocket.send_json({"type": "chunk", "text": char})
+                await asyncio.sleep(0.01)
 
-            await websocket.send_json({
-                "type": "done",
-                "session_id": sid,
-            })
+            await websocket.send_json({"type": "done", "session_id": sid})
 
             session_id = sid
 
@@ -453,11 +453,6 @@ async def websocket_chat(websocket: WebSocket):
         pass
     except Exception:
         pass
-
-
-def _split_response(text: str, chunk_size: int = 20) -> list:
-    """Split response into streaming chunks."""
-    return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
 
 
 # ── Config ───────────────────────────────────────────────────
@@ -476,6 +471,34 @@ async def get_config():
     return safe_config
 
 
+@app.post("/api/config")
+async def update_config(update: ConfigUpdate):
+    """Update configuration."""
+    global CONFIG
+
+    if update.llm:
+        CONFIG["llm"] = {**CONFIG.get("llm", {}), **update.llm}
+
+    if update.provider_config:
+        CONFIG["providers"] = update.provider_config
+
+    # Save to config file
+    try:
+        config_path = ROOT / "system" / "config.yaml"
+        if config_path.exists():
+            import yaml
+            with open(config_path, "r") as f:
+                existing = yaml.safe_load(f) or {}
+            existing["llm"] = CONFIG.get("llm", {})
+            existing["providers"] = CONFIG.get("providers", [])
+            with open(config_path, "w") as f:
+                yaml.dump(existing, f, default_flow_style=False)
+    except Exception as e:
+        print(f"[WEB] Failed to save config: {e}")
+
+    return {"status": "ok"}
+
+
 # ── Agents ───────────────────────────────────────────────────
 @app.get("/api/agents")
 async def list_agents():
@@ -492,3 +515,18 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("CUSTO_WEB_PORT", 18790))
     uvicorn.run(app, host="127.0.0.1", port=port)
+
+
+# ── SPA Fallback (must be last) ──────────────────────────────
+if CUSTO_UI_DIST.exists():
+    @app.get("/{path:path}")
+    async def serve_static(path: str):
+        """Serve static files from the React build."""
+        file_path = CUSTO_UI_DIST / path
+        if file_path.is_file():
+            return FileResponse(str(file_path))
+        # SPA fallback - serve index.html for client-side routing
+        index = CUSTO_UI_DIST / "index.html"
+        if index.exists():
+            return HTMLResponse(content=index.read_text(encoding="utf-8"))
+        raise HTTPException(status_code=404, detail="Not found")
