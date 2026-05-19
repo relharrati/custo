@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -104,17 +104,40 @@ app.add_middleware(
 
 # ── Static Files & SPA ───────────────────────────────────────
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+CUSTO_UI_DIST = FRONTEND_DIR / "custo-ui" / "dist"
 
-app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+# Serve the built React app
+if CUSTO_UI_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=str(CUSTO_UI_DIST / "assets")), name="assets")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend():
     """Serve the web UI."""
-    index = FRONTEND_DIR / "index.html"
+    # Try the new React app first
+    index = CUSTO_UI_DIST / "index.html"
     if index.exists():
         return HTMLResponse(content=index.read_text(encoding="utf-8"))
+    # Fall back to old single-file frontend
+    old_index = FRONTEND_DIR / "index.html"
+    if old_index.exists():
+        return HTMLResponse(content=old_index.read_text(encoding="utf-8"))
     return HTMLResponse(content="<h1>Frontend not found</h1>", status_code=404)
+
+
+# Serve any other static files from dist (favicons, etc.)
+if CUSTO_UI_DIST.exists():
+    @app.get("/{path:path}")
+    async def serve_static(path: str):
+        """Serve static files from the React build."""
+        file_path = CUSTO_UI_DIST / path
+        if file_path.is_file():
+            return FileResponse(str(file_path))
+        # SPA fallback - serve index.html for client-side routing
+        index = CUSTO_UI_DIST / "index.html"
+        if index.exists():
+            return HTMLResponse(content=index.read_text(encoding="utf-8"))
+        raise HTTPException(status_code=404, detail="Not found")
 
 
 # ── Health & System Info ─────────────────────────────────────
